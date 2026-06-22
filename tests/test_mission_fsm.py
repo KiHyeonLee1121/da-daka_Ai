@@ -13,14 +13,16 @@ from vision.dirt_detector_base import DirtDetectionResult
 from vision.target_estimator import TargetEstimate
 
 
-def make_fsm(max_retries: int = 3) -> MissionFSM:
+def make_fsm(max_retries: int = 3, **overrides) -> MissionFSM:
+    mission_config = {
+        "max_retries": max_retries,
+        "stable_hold_time_s": 1.0,
+        "search_timeout_s": 10.0,
+        "verify_area_reduction_ratio": 0.5,
+    }
+    mission_config.update(overrides)
     return MissionFSM(
-        {
-            "max_retries": max_retries,
-            "stable_hold_time_s": 1.0,
-            "search_timeout_s": 10.0,
-            "verify_area_reduction_ratio": 0.5,
-        },
+        mission_config,
         {"pulse_duration_s": 0.3, "stabilize_wait_s": 1.5},
     )
 
@@ -96,5 +98,29 @@ def test_retry_exceeded_aborts() -> None:
     fsm.state = MissionState.RETRY
     fsm.retry_count = 1
     out = fsm.update(make_inputs(found=True, aligned=True, distance_ok=True))
+    assert out.state == MissionState.ABORT
+    assert out.abort is True
+
+
+def test_required_consecutive_detections_delays_alignment() -> None:
+    fsm = make_fsm(required_detection_frames=2)
+    fsm.state = MissionState.DETECT_DIRT
+
+    out = fsm.update(make_inputs(found=True, aligned=True, distance_ok=True, timestamp=1.0))
+    assert out.state == MissionState.DETECT_DIRT
+    assert out.detection_streak == 1
+
+    out = fsm.update(make_inputs(found=True, aligned=True, distance_ok=True, timestamp=1.1))
+    assert out.state == MissionState.STOP_BEFORE_SPRAY
+    assert out.detection_streak == 2
+
+
+def test_spray_limit_aborts_before_extra_pulse() -> None:
+    fsm = make_fsm(max_spray_events=1)
+    fsm.state = MissionState.STOP_BEFORE_SPRAY
+    fsm.stable_since = 0.0
+    fsm.spray_count = 1
+
+    out = fsm.update(make_inputs(found=True, aligned=True, distance_ok=True, timestamp=2.0))
     assert out.state == MissionState.ABORT
     assert out.abort is True

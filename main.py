@@ -112,6 +112,7 @@ def main() -> int:
 
     show_window = bool(config.get("debug", {}).get("show_window", True))
     save_video = bool(config.get("debug", {}).get("save_video", False))
+    max_mission_time_s = float(config.get("safety", {}).get("max_mission_time_s", 0.0))
     video_writer = None
     debug_video_path = None
 
@@ -120,10 +121,12 @@ def main() -> int:
 
         camera.open()
         mavlink.connect()
-        fsm.start(now_s())
+        mission_start_s = now_s()
+        fsm.start(mission_start_s)
         frame_count = 0
 
         while True:
+            loop_now_s = now_s()
             ok, frame = camera.read()
             if not ok or frame is None:
                 logging.info("No more frames from source")
@@ -148,7 +151,7 @@ def main() -> int:
                 target=target,
                 lidar=lidar_reading,
                 visual_command=visual_command,
-                timestamp=now_s(),
+                timestamp=loop_now_s,
             )
             output = fsm.update(fsm_inputs)
             spray_event = execute_command(mavlink, spray_controller, output)
@@ -181,6 +184,8 @@ def main() -> int:
                     command=output.command,
                     spray_event=spray_event,
                     retry_count=output.retry_count,
+                    detection_streak=output.detection_streak,
+                    spray_count=output.spray_count,
                     message=output.message,
                 )
             )
@@ -194,6 +199,10 @@ def main() -> int:
 
             if output.done or output.abort:
                 logging.info("Mission terminal state: %s (%s)", output.state.value, output.message)
+                break
+
+            if max_mission_time_s > 0 and loop_now_s - mission_start_s >= max_mission_time_s:
+                logging.warning("Mission time limit reached: %.1fs", max_mission_time_s)
                 break
 
             if args.max_frames and frame_count >= args.max_frames:

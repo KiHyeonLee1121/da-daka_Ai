@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import math
 from typing import Any
 
 from control.visual_servo import MovementCommand
@@ -44,6 +45,8 @@ class MissionOutput:
     done: bool = False
     abort: bool = False
     retry_count: int = 0
+    detection_streak: int = 0
+    spray_count: int = 0
     message: str = ""
 
 
@@ -53,6 +56,10 @@ class MissionFSM:
         self.stable_hold_time_s = float(mission_config.get("stable_hold_time_s", 1.0))
         self.search_timeout_s = float(mission_config.get("search_timeout_s", 10.0))
         self.verify_area_reduction_ratio = float(mission_config.get("verify_area_reduction_ratio", 0.5))
+        self.required_detection_frames = max(1, int(mission_config.get("required_detection_frames", 1)))
+        self.target_stability_max_jump_px = float(mission_config.get("target_stability_max_jump_px", 0.0))
+        self.min_spray_interval_s = float(mission_config.get("min_spray_interval_s", 0.0))
+        self.max_spray_events = max(1, int(mission_config.get("max_spray_events", self.max_retries + 1)))
         self.spray_duration_s = float(spray_config.get("pulse_duration_s", 0.3))
         self.stabilize_wait_s = float(spray_config.get("stabilize_wait_s", 1.5))
 
@@ -63,6 +70,9 @@ class MissionFSM:
         self.last_spray_at: float | None = None
         self.wait_started_at: float | None = None
         self.reference_area: float | None = None
+        self.detection_streak = 0
+        self.last_centroid: tuple[int, int] | None = None
+        self.spray_count = 0
 
     def start(self, now: float) -> None:
         self.state = MissionState.SEARCH_PANEL
@@ -107,8 +117,20 @@ class MissionFSM:
 
     def _handle_detect_dirt(self, inputs: MissionInputs) -> MissionOutput:
         if not inputs.detection.found:
+            self.detection_streak = 0
+            self.last_centroid = None
             self.state = MissionState.DONE
             return self._out(MovementCommand.hold("no dirt found"), "no dirt found", done=True)
+
+        if not self._target_is_stable(inputs.detection.centroid):
+            self.detection_streak = 1
+            self.last_centroid = inputs.detection.centroid
+            return self._out(MovementCommand.hold("confirming stable target"), "confirming stable target")
+
+        self.detection_streak += 1
+        self.last_centroid = inputs.detection.centroid
+        if self.detection_streak < self.required_detection_frames:
+            return self._out(MovementCommand.hold("confirming dirt detection"), "confirming dirt detection")
 
         if self.reference_area is None:
             self.reference_area = inputs.detection.area
@@ -117,6 +139,8 @@ class MissionFSM:
 
     def _handle_align_target(self, inputs: MissionInputs) -> MissionOutput:
         if not inputs.detection.found:
+            self.detection_streak = 0
+            self.last_centroid = None
             self.state = MissionState.DETECT_DIRT
             return self._out(MovementCommand.no_target("target lost"), "target lost")
 
@@ -129,6 +153,8 @@ class MissionFSM:
 
     def _handle_hold_distance(self, inputs: MissionInputs) -> MissionOutput:
         if not inputs.detection.found:
+            self.detection_streak = 0
+            self.last_centroid = None
             self.state = MissionState.DETECT_DIRT
             return self._out(MovementCommand.no_target("target lost during distance hold"), "target lost")
 
@@ -147,6 +173,8 @@ class MissionFSM:
 
     def _handle_stop_before_spray(self, inputs: MissionInputs) -> MissionOutput:
         if not inputs.detection.found:
+            self.detection_streak = 0
+            self.last_centroid = None
             self.state = MissionState.DETECT_DIRT
             self.stable_since = None
             return self._out(MovementCommand.no_target("target lost before spray"), "target lost")
@@ -168,8 +196,18 @@ class MissionFSM:
         if stable_for < self.stable_hold_time_s:
             return self._out(MovementCommand.stop("holding before spray"), "holding before spray")
 
+        if self.spray_count >= self.max_spray_events:
+            self.state = MissionState.ABORT
+            return self._out(MovementCommand.stop("spray limit exceeded"), "spray limit exceeded", abort=True)
+
+        if self.last_spray_at is not None:
+            elapsed_since_spray = inputs.timestamp - self.last_spray_at
+            if elapsed_since_spray < self.min_spray_interval_s:
+                return self._out(MovementCommand.stop("spray cooldown"), "spray cooldown")
+
         self.state = MissionState.SPRAY
         self.last_spray_at = inputs.timestamp
+        self.spray_count += 1
         return self._out(
             MovementCommand.stop("spray pulse"),
             "spray pulse",
@@ -215,6 +253,13 @@ class MissionFSM:
         self.state = MissionState.ALIGN_TARGET if inputs.detection.found else MissionState.DETECT_DIRT
         return self._out(inputs.visual_command, "retrying")
 
+    def _target_is_stable(self, centroid: tuple[int, int] | None) -> bool:
+        if centroid is None or self.last_centroid is None or self.target_stability_max_jump_px <= 0:
+            return True
+        dx = centroid[0] - self.last_centroid[0]
+        dy = centroid[1] - self.last_centroid[1]
+        return math.hypot(dx, dy) <= self.target_stability_max_jump_px
+
     def _out(
         self,
         command: MovementCommand,
@@ -232,5 +277,7 @@ class MissionFSM:
             done=done,
             abort=abort,
             retry_count=self.retry_count,
+            detection_streak=self.detection_streak,
+            spray_count=self.spray_count,
             message=message,
         )

@@ -31,6 +31,8 @@ FIELDNAMES = [
     "yaw_rate",
     "spray_event",
     "retry_count",
+    "detection_streak",
+    "spray_count",
     "message",
 ]
 
@@ -91,7 +93,9 @@ def make_log_row(
     command: Any,
     spray_event: Any,
     retry_count: int,
-    message: str,
+    detection_streak: int = 0,
+    spray_count: int = 0,
+    message: str = "",
 ) -> dict[str, Any]:
     bbox = detection.bbox if getattr(detection, "bbox", None) else (None, None, None, None)
     centroid = detection.centroid if getattr(detection, "centroid", None) else (None, None)
@@ -118,5 +122,7 @@ def make_log_row(
         "yaw_rate": getattr(command, "yaw_rate", 0.0),
         "spray_event": spray_event.backend if spray_event else "",
         "retry_count": retry_count,
+        "detection_streak": detection_streak,
+        "spray_count": spray_count,
         "message": message,
     }

@@ -161,6 +161,13 @@ Keep both dry-run settings enabled until the full bench and safety sequence is c
 
 `SerialLiDARReader` is included as a generic line parser. Replace `_parse_line()` once the actual LiDAR model and packet format are fixed.
 
+For feasibility, LiDAR readings are also validated and smoothed before the mission logic uses them. Tune these values in `config/params.yaml` during bench tests:
+
+- `lidar.min_valid_distance_m`
+- `lidar.max_valid_distance_m`
+- `lidar.smoothing_window`
+- `lidar.max_jump_m`
+
 ## Detector Backends
 
 `detector.backend: "opencv"` uses grayscale thresholding, morphology, contour filtering, area filtering, confidence scoring, and target prioritization.
@@ -189,9 +196,24 @@ Implemented states:
 Spray is only requested after:
 
 - A dirt target is detected
+- The target is confirmed for `mission.required_detection_frames`
 - Screen-center alignment is inside `visual_servo.align_threshold_px`
 - LiDAR distance is inside `target_distance_m +/- tolerance_m`
 - `STOP_BEFORE_SPRAY` remains stable for `mission.stable_hold_time_s`
+- Spray cooldown and max spray event limits are satisfied
+
+## Feasibility Variables
+
+The current MVP keeps the same feature set, but exposes practical variables that will decide whether the system works during low-altitude acrylic-panel tests:
+
+- Acrylic surface glare and transparency: `detector.reject_specular_highlights`, `detector.specular_v_threshold`, `detector.specular_saturation_max`
+- Camera/plate framing: manual `roi` values
+- Very low flight margin: `flight.expected_height_min_m`, `flight.expected_height_max_m`
+- LiDAR reliability: `lidar.min_valid_distance_m`, `lidar.max_valid_distance_m`, `lidar.smoothing_window`, `lidar.max_jump_m`
+- Target stability: `mission.required_detection_frames`, `mission.target_stability_max_jump_px`
+- Hose and spray disturbance recovery: `spray.stabilize_wait_s`, `mission.min_spray_interval_s`
+- Resource and test limits: `safety.max_mission_time_s`, `mission.max_retries`, `mission.max_spray_events`
+- Body-frame calibration: `visual_servo.axis_map`, `visual_servo.invert_x`, `visual_servo.invert_y`, `visual_servo.invert_z`
 
 ## Logs
 
@@ -216,6 +238,8 @@ Current tests cover:
 - Visual servo center/right/left/too-close/too-far commands
 - Mission FSM no-dirt, alignment, spray progression, retry abort behavior
 - Synthetic OpenCV blob detection and centroid estimation
+- Acrylic specular highlight rejection
+- LiDAR range validation, smoothing, and jump rejection
 
 ## Safety Before Real Flight
 
@@ -239,6 +263,7 @@ Update these before live aircraft tests:
 - `control/visual_servo.py`: confirm body-frame axis mapping.
 - `config/params.yaml`: adjust `invert_x`, `invert_y`, `invert_z`, and `axis_map`.
 - `config/params.yaml`: adjust `lidar.target_distance_m` if the real acrylic-panel test height differs from `1.6 m`.
+- `config/params.yaml`: tune LiDAR valid range, smoothing window, and max jump after bench measurements.
 - `config/params.yaml`: tune `detector.specular_*` values under the actual acrylic plate and lighting.
 - `sensors/lidar_reader.py`: replace generic serial parser with the real LiDAR protocol.
 - `control/mavlink_bridge.py`: confirm Pixhawk mode, setpoint frame, and acceptance of velocity commands.
