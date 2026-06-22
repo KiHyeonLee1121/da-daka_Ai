@@ -1,68 +1,105 @@
 # DAKA RPi MVP
 
-AI vision based local dirt detection and selective spray control MVP for a drone that tests on an acrylic plate arranged to mimic a solar panel.
+아크릴판을 태양광 패널처럼 꾸며 놓고, 드론이 카메라로 이물질을 찾은 뒤 가까운 거리에서 선택적으로 분사하는 흐름을 테스트하기 위한 Raspberry Pi 5용 MVP입니다.
 
-This repository is an initial Raspberry Pi 5 program structure for:
+처음부터 실제 태양광 패널 현장에 바로 투입하는 프로그램은 아닙니다. 현재 목표는 훨씬 현실적인 쪽에 가깝습니다. 낮은 고도에서 아크릴 모사 패널을 촬영하고, 화면 안의 이물질 위치를 찾고, LiDAR 거리 조건이 맞을 때만 분사 명령을 내리는 기본 임무 흐름을 먼저 검증합니다.
 
-- Camera frame input from a bottom-facing camera
-- Acrylic mock-panel ROI handling
-- OpenCV dirt detection for bird droppings, dust, and foreign objects
-- Target centroid and screen-center error estimation
-- Mock or serial LiDAR distance reading
-- Screen-center visual servoing command generation
-- Mission FSM based action decisions
-- Dry-run Pixhawk/MAVLink command bridge
-- Mock spray pulse controller
-- CSV and JSONL mission logging
-- Optional debug overlay video
+## 지금 구현된 것
 
-The MVP test surface is not a real solar panel. It assumes an acrylic plate or acrylic board visually arranged like a solar panel, with artificial dirt/foreign material placed on the surface for removal tests.
+이 프로젝트는 Raspberry Pi 5에서 바로 실행할 수 있는 단일 Python 프로그램입니다.
 
-The hardware configuration is fixed:
+- 하단 카메라 또는 영상 파일 입력
+- 아크릴 모사 패널 영역 처리
+- OpenCV 기반 이물질 검출
+- 이물질 중심점 계산
+- 화면 중심 기준 정렬 오차 계산
+- Mock 또는 Serial LiDAR 거리 입력
+- 화면 중심으로 타깃을 맞추는 visual servoing 명령 생성
+- Mission FSM 기반 임무 흐름 제어
+- Pixhawk/MAVLink dry-run 브리지
+- Mock 분사 컨트롤러
+- CSV, JSONL 로그 저장
+- 디버그 화면 및 선택적 디버그 영상 저장
 
-- Drone airframe
-- Pixhawk flight controller
+현재 검출기는 딥러닝 모델이 아니라 OpenCV 기반입니다. Raspberry Pi 5 + AI HAT+ 13 TOPS를 나중에 붙일 수 있도록 `hailo_dirt_detector.py` 인터페이스는 준비해 두었지만, 실제 Hailo HEF 모델 추론은 아직 연결하지 않았습니다.
+
+## 테스트 대상
+
+실제 태양광 패널이 아니라, 태양광 패널처럼 보이도록 만든 아크릴판을 대상으로 합니다.
+
+아크릴판은 실제 패널보다 반사와 글레어가 강할 수 있고, 조명 위치에 따라 흰색 하이라이트가 이물질처럼 보일 수 있습니다. 그래서 OpenCV 검출기에는 밝고 채도가 낮은 반사 영역을 걸러내는 옵션을 넣었습니다.
+
+실제 시험에서는 다음 조건을 먼저 확인하는 것이 중요합니다.
+
+- 아크릴판 표면 반사
+- 카메라 각도
+- 조명 위치
+- 이물질 색상과 크기
+- LiDAR가 아크릴판 표면에서 안정적으로 거리를 읽는지
+- 호스와 분사 반동이 기체 자세에 주는 영향
+
+## 하드웨어 구성
+
+하드웨어는 아래 구성을 기준으로 합니다. 새 센서나 보드를 추가하는 것을 전제로 하지 않습니다.
+
+- 드론 기체
+- Pixhawk 기반 비행제어기
 - Raspberry Pi 5
 - Raspberry Pi 5 AI HAT+ 13 TOPS
-- Bottom camera
-- Bottom or nozzle-axis LiDAR
-- Ground pump
-- Hose line
-- Nozzle
-- Solenoid valve or spray trigger
-- Existing battery and power layout
+- 드론 하단 카메라
+- 드론 하단 또는 노즐 축 근처 LiDAR
+- 지상 펌프
+- 호스 라인
+- 노즐
+- 솔레노이드 밸브 또는 분사 트리거
+- 기존 배터리 및 전원 구성
 
-## Role Split
+## Raspberry Pi와 Pixhawk의 역할
 
-Raspberry Pi 5 handles high-level perception and decisions:
+Raspberry Pi는 판단을 담당합니다.
 
-- Dirt detection
-- Dirt centroid calculation
-- Alignment error from frame center
-- LiDAR distance condition checks
-- Mission state machine
-- High-level movement, hold, stop, spray, wait decisions
+- 카메라 프레임 처리
+- 이물질 검출
+- 이물질 중심점 계산
+- 화면 중심과의 오차 계산
+- LiDAR 거리 조건 확인
+- 임무 상태 판단
+- Pixhawk에 상위 명령 전달
+- 분사 조건 확인
 
-Pixhawk handles low-level flight:
+Pixhawk는 비행 안정화를 담당합니다.
 
-- Attitude stabilization
-- Flight control loops
-- Position/velocity setpoint handling
-- Real aircraft stability
+- 자세 안정화
+- 저수준 비행 제어
+- 위치/속도 setpoint 처리
+- 실제 기체 안정성 유지
 
-The Raspberry Pi does not directly control motors.
+Raspberry Pi가 모터를 직접 제어하지 않습니다. 이 구조를 지키는 이유는 안전 때문입니다.
 
-## MVP Control Strategy
+## 왜 3D 좌표 계산을 먼저 하지 않았나
 
-This MVP uses screen-center visual servoing instead of precise 3D coordinate reconstruction.
+이 프로젝트의 첫 목표는 정확한 3D 좌표 복원이 아니라, 실제로 돌아가는 임무 흐름을 만드는 것입니다.
 
-The first goal is a working mission flow, not millimeter-level localization. The detector finds a dirt centroid `(cx, cy)`, compares it to the frame center, and generates small velocity setpoints until the dirt appears near the center. LiDAR then verifies that the drone is within the target work distance before any spray pulse is allowed.
+현재 방식은 이렇습니다.
 
-This is simpler, easier to test with videos/webcams/mock data, and more likely to work before full camera calibration, panel geometry estimation, and drone-frame transforms are ready.
+1. 이미지에서 이물질 중심점 `(cx, cy)`를 찾습니다.
+2. 화면 중심과 얼마나 떨어져 있는지 계산합니다.
+3. 이물질이 화면 중앙에 오도록 드론을 조금씩 움직이는 명령을 만듭니다.
+4. LiDAR 거리값이 목표 범위 안에 들어오면 정지합니다.
+5. 일정 시간 안정적으로 유지되면 짧게 분사합니다.
+6. 다시 촬영해서 이물질이 줄었는지 확인합니다.
 
-For the current acrylic mock-panel tests, the default LiDAR target distance is tuned around `1.6 m` with a wider tolerance. The expected very low flight height is `1.5 m` to `2.0 m`, so default velocity caps are intentionally small.
+이 방식은 카메라 캘리브레이션, 패널 좌표계, 드론 좌표계 변환이 완성되기 전에도 테스트할 수 있습니다. 특히 현재처럼 낮은 고도에서 아크릴판을 대상으로 실험하는 단계에서는 이 접근이 더 단순하고 검증하기 쉽습니다.
 
-## Directory Tree
+## 낮은 고도 테스트 기준
+
+예상 비행 높이는 약 `1.5 m ~ 2.0 m`입니다.
+
+매우 낮은 고도에서는 작은 오차도 위험해질 수 있기 때문에 기본 속도 제한을 작게 잡았습니다. 현재 설정에서는 visual servoing 속도 상한이 `0.12 m/s`입니다.
+
+LiDAR 목표 거리는 기본 `1.6 m`, 허용 오차는 `0.25 m`로 설정되어 있습니다. 실제 아크릴판 배치와 카메라/노즐 장착 위치에 따라 반드시 다시 조정해야 합니다.
+
+## 프로젝트 구조
 
 ```text
 daka_rpi/
@@ -93,16 +130,17 @@ daka_rpi/
     time_utils.py
   tests/
     test_dirt_detector_acrylic.py
-    test_visual_servo.py
-    test_mission_fsm.py
     test_dirt_detector_synthetic.py
+    test_lidar_reader.py
+    test_mission_fsm.py
+    test_visual_servo.py
   logs/
   data/sample/
 ```
 
-## Install
+## 설치
 
-On Raspberry Pi OS, using a virtual environment is recommended:
+Raspberry Pi OS에서는 가상환경 사용을 권장합니다.
 
 ```bash
 cd daka_rpi
@@ -111,7 +149,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If OpenCV wheel installation is slow or unavailable on the Pi, install system OpenCV instead:
+Pi에서 OpenCV wheel 설치가 느리거나 실패하면 시스템 패키지를 쓰는 편이 낫습니다.
 
 ```bash
 sudo apt update
@@ -119,66 +157,115 @@ sudo apt install python3-opencv
 pip install PyYAML pytest pyserial pymavlink
 ```
 
-## Run
+## 실행
 
-Webcam or default camera index:
+기본 카메라 또는 웹캠:
 
 ```bash
 python main.py --config config/params.yaml --dry-run
 ```
 
-Video file:
+영상 파일로 테스트:
 
 ```bash
 python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-run
 ```
 
-Headless run:
+화면 없이 실행:
 
 ```bash
 python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-run --no-display
 ```
 
-Save debug overlay video:
+디버그 영상을 저장하면서 실행:
 
 ```bash
 python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-run --no-display --save-video
 ```
 
-Quit the debug window with `q`.
+디버그 창이 켜져 있을 때는 `q`를 누르면 종료됩니다.
 
-## Dry-Run Mode
+## Dry-run 모드
 
-`mavlink.dry_run: true` is the default. In dry-run mode, MAVLink commands are logged but not sent.
+기본값은 안전을 위해 dry-run입니다.
 
-`spray.dry_run: true` is also the default. The mock spray controller logs a short pulse event but does not toggle GPIO, relay, servo, or Pixhawk actuator output.
+`mavlink.dry_run: true`이면 Pixhawk로 실제 MAVLink 명령을 보내지 않고 로그만 남깁니다.
 
-Keep both dry-run settings enabled until the full bench and safety sequence is complete.
+`spray.dry_run: true`이면 실제 GPIO, 릴레이, 서보, 액추에이터를 동작시키지 않고 mock 분사 이벤트만 기록합니다.
 
-## Mock LiDAR
+실제 기체와 분사 장치를 연결하기 전까지는 이 값을 유지하는 것이 좋습니다.
 
-`lidar.backend: "mock"` returns `mock_distance_m` with Gaussian noise. This lets the mission FSM and visual servo logic run before the real LiDAR protocol is known.
+## LiDAR 처리
 
-`SerialLiDARReader` is included as a generic line parser. Replace `_parse_line()` once the actual LiDAR model and packet format are fixed.
+기본 LiDAR backend는 mock입니다.
 
-For feasibility, LiDAR readings are also validated and smoothed before the mission logic uses them. Tune these values in `config/params.yaml` during bench tests:
+```yaml
+lidar:
+  backend: "mock"
+```
+
+Mock LiDAR는 설정된 거리값에 약간의 노이즈를 넣어 반환합니다. 실제 LiDAR가 없어도 FSM과 visual servoing 흐름을 테스트할 수 있습니다.
+
+실제 LiDAR를 사용할 때는 `SerialLiDARReader`를 기반으로 프로토콜 파서를 바꾸면 됩니다. 아직 특정 LiDAR 모델을 고정하지 않았기 때문에 현재는 일반적인 line-based parsing 형태로만 들어가 있습니다.
+
+낮은 고도에서는 LiDAR 값이 한 번 튀는 것만으로도 잘못된 접근/후퇴 명령이 나갈 수 있습니다. 그래서 다음 변수들을 설정할 수 있게 했습니다.
 
 - `lidar.min_valid_distance_m`
 - `lidar.max_valid_distance_m`
 - `lidar.smoothing_window`
 - `lidar.max_jump_m`
 
-## Detector Backends
+## 이물질 검출
 
-`detector.backend: "opencv"` uses grayscale thresholding, morphology, contour filtering, area filtering, confidence scoring, and target prioritization.
+현재 기본 검출기는 OpenCV 방식입니다.
 
-Because acrylic can be glossy or partially transparent, the OpenCV detector includes optional specular-highlight rejection. Very bright, low-saturation highlights are rejected so overhead lights or acrylic glare are less likely to be treated as dirt.
+```yaml
+detector:
+  backend: "opencv"
+```
 
-`detector.backend: "hailo"` is a safe AI HAT+ placeholder. It logs that Hailo inference is not implemented yet and falls back to OpenCV. Later, connect HailoRT preprocessing, HEF inference, and postprocessing inside `vision/hailo_dirt_detector.py`.
+처리 흐름은 대략 다음과 같습니다.
+
+1. grayscale 변환
+2. blur
+3. threshold
+4. morphology open/close
+5. contour detection
+6. 면적 필터링
+7. 반사 하이라이트 제거
+8. 중심점, bbox, confidence 계산
+9. 우선순위가 높은 후보 선택
+
+아크릴판 반사 때문에 생기는 흰색 하이라이트는 오염으로 오검출될 수 있습니다. 이를 줄이기 위해 `detector.reject_specular_highlights`, `detector.specular_v_threshold`, `detector.specular_saturation_max` 값을 두었습니다.
+
+## AI HAT+ 관련 상태
+
+현재 버전은 AI HAT+ 13 TOPS에서 실제 모델을 돌리는 상태는 아닙니다.
+
+대신 다음을 준비해 두었습니다.
+
+- `BaseDirtDetector` 인터페이스
+- OpenCV 기반 detector
+- Hailo detector stub
+- config 기반 backend 선택 구조
+- 추후 `model_path`를 통한 HEF 모델 연결 자리
+
+즉, 지금 코드는 Raspberry Pi 5에서 가볍게 돌아가는 MVP이고, Hailo 모델 추론은 다음 단계입니다.
+
+Hailo를 실제로 쓰려면 별도로 해야 할 일이 있습니다.
+
+1. 아크릴판 이물질 이미지 데이터 수집
+2. 작은 detection 또는 segmentation 모델 학습
+3. INT8 양자화
+4. Hailo용 HEF 컴파일
+5. `hailo_dirt_detector.py`에 HailoRT 추론 연결
+6. Pi 5에서 FPS와 지연시간 측정
 
 ## Mission FSM
 
-Implemented states:
+임무 흐름은 상태머신으로 관리합니다.
+
+구현된 상태는 다음과 같습니다.
 
 - `IDLE`
 - `SEARCH_PANEL`
@@ -193,82 +280,99 @@ Implemented states:
 - `RETRY`
 - `ABORT`
 
-Spray is only requested after:
+분사는 아무 때나 발생하지 않습니다. 최소한 아래 조건을 통과해야 합니다.
 
-- A dirt target is detected
-- The target is confirmed for `mission.required_detection_frames`
-- Screen-center alignment is inside `visual_servo.align_threshold_px`
-- LiDAR distance is inside `target_distance_m +/- tolerance_m`
-- `STOP_BEFORE_SPRAY` remains stable for `mission.stable_hold_time_s`
-- Spray cooldown and max spray event limits are satisfied
+- 이물질이 검출되어야 함
+- `mission.required_detection_frames`만큼 연속 확인되어야 함
+- 화면 중심 정렬 오차가 threshold 안에 들어와야 함
+- LiDAR 거리가 목표 범위 안에 있어야 함
+- 정지 상태가 `mission.stable_hold_time_s` 동안 유지되어야 함
+- 분사 쿨다운과 최대 분사 횟수 조건을 만족해야 함
 
-## Feasibility Variables
+## 실현가능성에 영향을 주는 변수
 
-The current MVP keeps the same feature set, but exposes practical variables that will decide whether the system works during low-altitude acrylic-panel tests:
+실제 테스트에서 중요한 변수들은 코드 안에 설정값으로 빼 두었습니다.
 
-- Acrylic surface glare and transparency: `detector.reject_specular_highlights`, `detector.specular_v_threshold`, `detector.specular_saturation_max`
-- Camera/plate framing: manual `roi` values
-- Very low flight margin: `flight.expected_height_min_m`, `flight.expected_height_max_m`
-- LiDAR reliability: `lidar.min_valid_distance_m`, `lidar.max_valid_distance_m`, `lidar.smoothing_window`, `lidar.max_jump_m`
-- Target stability: `mission.required_detection_frames`, `mission.target_stability_max_jump_px`
-- Hose and spray disturbance recovery: `spray.stabilize_wait_s`, `mission.min_spray_interval_s`
-- Resource and test limits: `safety.max_mission_time_s`, `mission.max_retries`, `mission.max_spray_events`
-- Body-frame calibration: `visual_servo.axis_map`, `visual_servo.invert_x`, `visual_servo.invert_y`, `visual_servo.invert_z`
+- 아크릴판 반사: `detector.reject_specular_highlights`, `detector.specular_v_threshold`, `detector.specular_saturation_max`
+- 카메라와 판의 위치: `roi`
+- 낮은 고도 여유: `flight.expected_height_min_m`, `flight.expected_height_max_m`
+- LiDAR 신뢰성: `lidar.min_valid_distance_m`, `lidar.max_valid_distance_m`, `lidar.smoothing_window`, `lidar.max_jump_m`
+- 타깃 안정성: `mission.required_detection_frames`, `mission.target_stability_max_jump_px`
+- 호스와 분사 반동 회복: `spray.stabilize_wait_s`, `mission.min_spray_interval_s`
+- 테스트 제한: `safety.max_mission_time_s`, `mission.max_retries`, `mission.max_spray_events`
+- 축 방향 보정: `visual_servo.axis_map`, `visual_servo.invert_x`, `visual_servo.invert_y`, `visual_servo.invert_z`
 
-## Logs
+이 값들은 실제 아크릴판, 조명, 카메라, LiDAR 장착 위치에 따라 반드시 다시 맞춰야 합니다.
 
-When `debug.save_logs: true`, mission logs are written to:
+## 로그
+
+`debug.save_logs: true`이면 실행 로그가 저장됩니다.
 
 ```text
 logs/mission_YYYYMMDD_HHMMSS.csv
 logs/mission_YYYYMMDD_HHMMSS.jsonl
 ```
 
-Each row includes FSM state, detection result, target centroid, bbox, area, confidence, alignment error, LiDAR distance, generated command, spray event, and retry count.
+로그에는 다음 정보가 들어갑니다.
 
-## Tests
+- FSM 상태
+- 이물질 검출 여부
+- 중심점
+- bbox
+- 면적
+- confidence
+- 화면 중심 오차
+- LiDAR 거리
+- 생성된 명령
+- 분사 이벤트
+- retry 횟수
+- detection streak
+- spray count
+
+실제 시험에서는 이 로그를 보고 threshold와 거리 조건을 조정하는 것이 좋습니다.
+
+## 테스트
 
 ```bash
 cd daka_rpi
 python -m pytest tests
 ```
 
-Current tests cover:
+현재 테스트는 다음을 확인합니다.
 
-- Visual servo center/right/left/too-close/too-far commands
-- Mission FSM no-dirt, alignment, spray progression, retry abort behavior
-- Synthetic OpenCV blob detection and centroid estimation
-- Acrylic specular highlight rejection
-- LiDAR range validation, smoothing, and jump rejection
+- visual servoing 방향 명령
+- Mission FSM 전이
+- synthetic image 기반 이물질 검출
+- 아크릴판 반사 하이라이트 제거
+- LiDAR 거리 범위 검증
+- LiDAR smoothing
+- LiDAR jump rejection
 
-## Safety Before Real Flight
+## 실제 기체 테스트 전 안전 절차
 
-Before any live MAVLink or spray output:
+실제 MAVLink 출력이나 실제 분사 장치를 연결하기 전에 아래 순서를 지키는 것을 권장합니다.
 
-1. Remove propellers and test software only.
-2. Keep MAVLink in dry-run and verify logs.
-3. Run SITL with the same command interface.
-4. Bench-test LiDAR readings against measured distances over the acrylic mock panel.
-5. Bench-test acrylic glare and dirt detection under the actual test lighting.
-6. Bench-test spray in mock mode first.
-7. Configure and test the real spray actuator output without propellers.
-8. Perform restrained aircraft tests.
-9. Run low-speed, very low-altitude tests in the expected `1.5 m` to `2.0 m` height range.
-10. Enable live output only after axis signs, body-frame mapping, and failsafe behavior are verified.
+1. 프로펠러 제거 상태에서 소프트웨어만 테스트
+2. MAVLink dry-run으로 로그 확인
+3. SITL에서 setpoint 흐름 확인
+4. 아크릴판 위에서 LiDAR 거리값 실측 비교
+5. 실제 조명 아래에서 아크릴판 반사와 이물질 검출 확인
+6. mock 분사 테스트
+7. 프로펠러 제거 상태에서 실제 분사 액추에이터 테스트
+8. 계류 상태에서 기체 반응 확인
+9. `1.5 m ~ 2.0 m` 범위의 저속, 저고도 시험
+10. 축 방향, failsafe, 분사 조건을 모두 확인한 뒤 live output 활성화
 
-## Real Hardware Calibration Points
+## 실제 하드웨어 연결 시 수정할 곳
 
-Update these before live aircraft tests:
+실제 장비를 붙일 때는 아래 파일들을 우선 확인하면 됩니다.
 
-- `control/visual_servo.py`: confirm body-frame axis mapping.
-- `config/params.yaml`: adjust `invert_x`, `invert_y`, `invert_z`, and `axis_map`.
-- `config/params.yaml`: adjust `lidar.target_distance_m` if the real acrylic-panel test height differs from `1.6 m`.
-- `config/params.yaml`: tune LiDAR valid range, smoothing window, and max jump after bench measurements.
-- `config/params.yaml`: tune `detector.specular_*` values under the actual acrylic plate and lighting.
-- `sensors/lidar_reader.py`: replace generic serial parser with the real LiDAR protocol.
-- `control/mavlink_bridge.py`: confirm Pixhawk mode, setpoint frame, and acceptance of velocity commands.
-- `actuator/spray_command.py`: replace mock/GPIO/MAVLink placeholder with the selected solenoid trigger path.
-- `vision/panel_detector.py`: replace full-frame ROI with panel contour/grid detection if needed.
-- `vision/hailo_dirt_detector.py`: add Hailo HEF model inference when the trained model is available.
+- `config/params.yaml`: 거리, 속도, ROI, detector threshold 조정
+- `control/visual_servo.py`: 실제 드론 기준 축 방향 보정
+- `sensors/lidar_reader.py`: 실제 LiDAR 프로토콜 파서 구현
+- `control/mavlink_bridge.py`: Pixhawk 모드와 velocity setpoint 방식 확인
+- `actuator/spray_command.py`: GPIO 또는 MAVLink actuator command 연결
+- `vision/panel_detector.py`: 필요하면 전체 화면 ROI 대신 패널 윤곽 검출 추가
+- `vision/hailo_dirt_detector.py`: Hailo HEF 모델 추론 연결
 
-Do not enable actual spray unless alignment and LiDAR distance conditions are satisfied in logs.
+정렬 조건과 LiDAR 거리 조건이 로그에서 안정적으로 확인되기 전에는 실제 분사를 켜지 않는 것이 좋습니다.
