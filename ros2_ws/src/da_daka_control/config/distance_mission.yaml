@@ -1,0 +1,43 @@
+mission_manager:
+  ros__parameters:
+    # Flight profile
+    takeoff_altitude: 1.1
+    hover_altitude_tolerance: 0.1
+    hover_max_vertical_speed: 0.1
+    hover_hold_duration: 2.0
+    prestream_duration: 2.0
+    target_hold_confirm_duration: 0.2
+
+    # Health and total distance-control limits
+    sensor_timeout: 0.3
+    telemetry_timeout: 0.5
+    distance_control_timeout: 20.0
+
+    # Non-blocking FSM and retry policy
+    fsm_rate_hz: 20.0
+    service_retry_interval: 1.0
+    max_retries: 3
+    loiter_mode: AUTO.LOITER
+    land_mode: AUTO.LAND
+    # If QGC/RC/PX4 leaves OFFBOARD, never fight the confirmed external mode.
+    respect_external_mode_override: true
+
+    # Per-state timeouts
+    precheck_timeout: 5.0
+    arming_timeout: 5.0
+    takeoff_timeout: 5.0
+    wait_hover_timeout: 15.0
+    check_sensor_timeout: 3.0
+    prestream_timeout: 6.0
+    enable_timeout: 3.0
+    offboard_timeout: 5.0
+    target_hold_timeout: 3.0
+    loiter_timeout: 5.0
+    land_timeout: 5.0
+    wait_disarm_timeout: 30.0
+    abort_timeout: 30.0
+
+    # One CSV per mission, including FSM events and 10 Hz telemetry.
+    enable_csv_logging: true
+    log_directory: ~/da_daka_logs/distance_mission
+    telemetry_log_rate_hz: 10.0

@@ -4,44 +4,84 @@
 
 처음부터 실제 태양광 패널 현장에 바로 투입하는 프로그램은 아님. 현재 목표는 훨씬 현실적인 쪽. 낮은 고도에서 아크릴 모사 패널을 촬영하고, 화면 안의 이물질 위치를 찾고, LiDAR 거리 조건이 맞을 때만 분사 명령을 내리는 기본 임무 흐름을 먼저 검증.
 
-## 2026-07-24 Raspberry Pi ROS 2 제어구조 개편
+## 현재 시스템 구조
 
-노트북 VM에서 실행하던 거리제어 코드를 정리해, 최종적으로 Raspberry Pi
-5에서 ROS 2 Humble, MAVROS와 함께 실행할 수 있는
-`da_daka_control` 패키지를 별도 브랜치에 추가했다.
+실기체 제어 구조는 제어팀 PC에서 OFFBOARD 명령을 생성하는 방식에서,
+Raspberry Pi 5가 기체 탑재 제어 컴퓨터 역할을 하는 방식으로 개편 중이다.
 
-- 작업 브랜치:
-  [`codex/rpi-ros2-distance-control`](https://github.com/KiHyeonLee1121/da-daka_Ai/tree/codex/rpi-ros2-distance-control)
-- ROS 2 패키지:
-  [`ros2_ws/src/da_daka_control`](https://github.com/KiHyeonLee1121/da-daka_Ai/tree/codex/rpi-ros2-distance-control/ros2_ws/src/da_daka_control)
-- 상세 구조:
-  [`docs/system_architecture.md`](https://github.com/KiHyeonLee1121/da-daka_Ai/blob/codex/rpi-ros2-distance-control/docs/system_architecture.md)
+```text
+제어팀 PC QGroundControl
+  └─ 상태 감시, 모드 확인, Hold/Land 비상 개입
+                 ↕ Wi-Fi UDP MAVLink
+Raspberry Pi 5
+  ├─ mavlink-router
+  ├─ ROS 2 Humble / MAVROS
+  ├─ TF-Luna 거리 입력, 필터, 1 m 거리제어
+  ├─ 단일 Mission Manager
+  ├─ 카메라 및 오염 검출
+  └─ 분사제어
+                 ↕ Serial MAVLink
+Pixhawk 4 / PX4
+  └─ 자세 안정화와 저수준 비행제어
+```
 
-주요 작업:
+비행 순서와 PX4 모드 전환 권한은 ROS 2 `mission_manager` 하나로
+제한한다. 거리 오차에 따른 속도 setpoint는 활성화된
+`distance_controller`만 발행한다. 기존 `main.py`의 `MavlinkBridge`와
+ROS 2 거리제어를 동시에 live 모드로 실행하면 안 된다. AI 코드는 검출
+결과를 제공하고, 분사 코드는 서비스 요청을 처리하는 방향으로 통합할
+예정이다.
 
-- 거리 필터, 목표거리 1.0 m 제어, SITL 가상센서 노드 정리
-- Arm부터 이륙, hover, OFFBOARD 거리제어, Loiter, Land, Disarm까지
-  관리하는 Enum 기반 Mission Manager 추가
-- 센서·상태 timeout, 상태 확인, 최대 3회 재시도와 자동 CSV 로그 추가
-- 목표거리 오차 ±0.08 m를 5초 유지하는 도달 판정 추가
-- QGC/RC/PX4 운전자 개입을 우선하고 OFFBOARD 자동 재진입을 막는 안전
-  동작 추가
-- 기존 Python MVP와 ROS 2 제어가 동시에 PX4에 live 명령을 보내지 않도록
-  통합 원칙 문서화
+현재 ROS 2 거리제어 패키지는 `ros2_ws/src/da_daka_control`에 있다.
+상세한 통합 상태, 인터페이스와 남은 작업은
+[`docs/system_architecture.md`](docs/system_architecture.md)를 참고한다.
 
-검증 결과는 기존 Python MVP `18 passed, 2 skipped`, ROS 2 패키지
-`22 passed, 1 skipped`이며 ROS 2 Humble `colcon build`도 완료했다.
-실기체 적용 전에는 TF-Luna 전용 ROS 2 드라이버, Pixhawk Serial MAVLink,
-MAVROS·mavlink-router·QGC UDP 경로를 추가 검증해야 한다.
+## 2026-07-24 Raspberry Pi 제어구조 개편 작업
 
-> 제어 코드는 아직 `main`에 병합하지 않았다. 현재 `main`에는 작업 내용과
-> 검증 브랜치 링크만 기록한다.
+제어 코드를 노트북 VM에서 실행하던 구조를 정리해, 최종적으로 Raspberry
+Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
+`ros2_ws/src/da_daka_control` 패키지를 추가했다. 제어팀 PC의 QGroundControl은
+상태 감시와 Hold/Land 비상 개입에 사용한다.
 
-## `main`에 구현된 기존 Python MVP
+이번에 추가·정리한 내용:
 
-현재 `main`의 실행 코드는 Raspberry Pi 5에서 바로 실행할 수 있는 단일
-Python MVP다. 카메라·AI·거리 조건·분사 흐름을 빠르게 검증하기 위한
-코드이며, 최종 실기체의 비행 모드와 거리제어 명령권자는 아니다.
+- 거리 입력을 처리하는 `distance_filter`
+- 목표거리 1.0 m를 유지하는 `distance_controller`
+- SITL 시험용 `virtual_distance_sensor`
+- Arm, 1.1 m 이륙, hover 확인, 거리제어, Loiter 인계, Land, Disarm을
+  순서대로 관리하는 Enum 기반 `mission_manager`
+- `/mission/start`, `/mission/abort` 서비스와 `/mission/state`,
+  `/mission/result` 상태 토픽
+- 거리센서 timeout 0.3초, 전체 거리제어 timeout 20초, 상태별 timeout과
+  최대 3회 재시도
+- 목표거리 오차 ±0.08 m를 5초 유지했을 때 도달 성공 판정
+- OFFBOARD 전 setpoint 2초 prestream과 서비스 응답 이후 실제 상태 확인
+- QGC/RC/PX4가 OFFBOARD를 해제하거나 Land로 전환하면 자동 재진입하지
+  않고 운전자 개입을 우선하는 override latch
+- 자동 CSV 미션 로그와 운전자 개입 모드 기록
+- Raspberry Pi용 `mavlink-router.conf.example`, launch 파일, YAML 설정,
+  단위 테스트 및 실행 문서
+
+검증 결과:
+
+- 기존 Python MVP 테스트: 18 passed, 2 skipped
+- ROS 2 `da_daka_control` 테스트: 22 passed, 1 skipped
+- ROS 2 Humble `colcon build`, package 설치 및 launch 인자 확인 완료
+
+아직 남은 실기체 통합:
+
+- TF-Luna 9-byte 바이너리 프레임을 읽어 `/distance/raw`로 발행하는 전용
+  ROS 2 드라이버
+- Raspberry Pi–Pixhawk Serial MAVLink 장치명과 baud rate 확정
+- MAVROS, mavlink-router, QGC UDP endpoint 실기체 검증
+- AI 오염 검출 결과를 이동 명령으로 바꾸는 ROS 인터페이스
+- 분사제어 서비스와 전체 청소 미션 연결
+- 프로펠러를 제거한 bench test 후 제한된 공간에서 단계별 비행시험
+
+## 기존 Python MVP와 ROS 2 제어 패키지
+
+프로젝트에는 기존 Raspberry Pi 단일 Python MVP와 ROS 2 거리제어 패키지가
+함께 있다.
 
 - 하단 카메라 또는 영상 파일 입력
 - 아크릴 모사 패널 영역 처리
@@ -55,6 +95,10 @@ Python MVP다. 카메라·AI·거리 조건·분사 흐름을 빠르게 검증�
 - Mock 분사 컨트롤러
 - CSV, JSONL 로그 저장
 - 디버그 화면 및 선택적 디버그 영상 저장
+- ROS 2 거리 필터와 수직 거리 PID 제어
+- MAVROS 기반 자동 Arm, 이륙, OFFBOARD, Loiter, Land Mission Manager
+- QGC/RC/PX4 외부 모드 개입 우선 처리
+- 거리제어 미션 CSV 로그
 
 현재 검출기는 딥러닝 모델이 아니라 OpenCV 기반. Raspberry Pi 5 + AI HAT+ 13 TOPS를 나중에 붙일 수 있도록 `hailo_dirt_detector.py` 인터페이스는 준비해 두었지만, 실제 Hailo HEF 모델 추론은 아직 연결하지 않음.
 
@@ -145,17 +189,18 @@ ROS Mission Manager만 비행 순서와 PX4 모드 전환을 관리해야 한다
 - ROS 2 거리제어 최대 수직속도: `0.25 m/s`
 
 `1.1 m`는 PX4 기준 상대 고도이고 `1.0 m`는 LiDAR가 측정한 표면까지의
-거리이므로 같은 값이 아니다. 평평한 지면에서는 비슷하게 보일 수 있지만,
-장착 오프셋과 대상 표면 높이에 따라 달라진다. 기존 `1.6 m` 설정을 ROS 2
-실기체 시험에 그대로 사용하면 안 된다.
+거리이므로 같은 값이 아니다. 기존 `1.6 m` 설정을 ROS 2 실기체 시험에
+그대로 사용하면 안 된다.
 
-## 기존 `main` Python MVP 구조
+## 프로젝트 구조
 
 ```text
 daka_rpi/
   README.md
   requirements.txt
   main.py
+  docs/
+    system_architecture.md
   config/
     params.yaml
   vision/
@@ -186,9 +231,53 @@ daka_rpi/
     test_visual_servo.py
   logs/
   data/sample/
+  ros2_ws/
+    src/
+      da_daka_control/
+        config/
+        da_daka_control/
+        launch/
+        resource/
+        test/
 ```
 
-## 기존 Python MVP 설치
+`build/`, `install/`, `log/`, Python 가상환경과 비행 로그는 Git에 포함하지
+않는다.
+
+## ROS 2 거리제어 패키지
+
+기준 환경은 Raspberry Pi 5의 Ubuntu 22.04 arm64와 ROS 2 Humble이다.
+
+```bash
+cd ros2_ws
+source /opt/ros/humble/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --packages-select da_daka_control
+source install/setup.bash
+colcon test --packages-select da_daka_control
+colcon test-result --verbose
+```
+
+실행 전 MAVROS, 실제 TF-Luna `/distance/raw`, Pixhawk 연결을 각각 확인한다.
+다음 launch는 TF-Luna 드라이버와 MAVROS를 자동으로 시작하지 않는다.
+
+```bash
+ros2 launch da_daka_control distance_mission.launch.py
+```
+
+`/mission/start`는 자동 Arm과 이륙을 시작하므로 프로펠러 제거 점검과
+GO/NO-GO 확인 전에는 호출하지 않는다.
+
+```bash
+ros2 service call /mission/start std_srvs/srv/Trigger "{}"
+ros2 service call /mission/abort std_srvs/srv/Trigger "{}"
+```
+
+현재 검증된 설정은 Home 기준 이륙고도 `1.1 m`, 하향 센서 목표거리
+`1.0 m`, 성공 허용폭 `±0.08 m`, 연속 유지시간 `5 s`다. ±0.08 m는
+VM/SITL 기준이므로 실제 TF-Luna 로그를 확인한 뒤 조정해야 한다.
+
+## 설치
 
 Raspberry Pi OS에서는 가상환경 사용을 권장.
 
@@ -207,7 +296,7 @@ sudo apt install python3-opencv
 pip install PyYAML pytest pyserial pymavlink
 ```
 
-## 기존 Python MVP 실행
+## 실행
 
 기본 카메라 또는 웹캠:
 
@@ -246,9 +335,8 @@ python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-ru
 실제 기체와 분사 장치를 연결하기 전까지는 이 값을 유지하는 것이 좋음.
 
 설정 파일에서 `mavlink.dry_run` 또는 `spray.dry_run`을 `false`로 바꾸는
-것만으로는 live 출력이 활성화되지 않는다. 기존 Python MVP의 실수로 인한
-명령 충돌을 막기 위해 프로그램이 시작을 거부한다. 승인된 프로펠러 제거
-bench test에서만 다음 명시적 옵션을 추가할 수 있다.
+것만으로는 live 출력이 활성화되지 않는다. 승인된 프로펠러 제거 bench
+test에서만 다음 명시적 옵션을 추가할 수 있다.
 
 ```bash
 python main.py --config config/params.yaml --allow-legacy-live-output
@@ -268,12 +356,13 @@ lidar:
 
 Mock LiDAR는 설정된 거리값에 약간의 노이즈를 넣어 반환합니다. 실제 LiDAR가 없어도 FSM과 visual servoing 흐름을 테스트할 수 있음.
 
-실제 센서는 하향 장착한 TF-Luna로 확정됐다. 현재 `main`의
+실제 장착 센서는 TF-Luna로 확정됐다. 현재 Python
 `SerialLiDARReader`는 일반적인 ASCII line parser이므로 TF-Luna의 9-byte
-바이너리 프레임을 올바르게 읽을 수 없다. 실기체에서는 ROS 2 TF-Luna 전용
-노드 하나만 USB/Serial 장치를 열고 `sensor_msgs/msg/Range` 형식의
-`/distance/raw`를 발행해야 한다. AI와 대시보드는 같은 시리얼 장치를 다시
-열지 말고 ROS 토픽을 구독해야 한다.
+바이너리 프레임을 올바르게 읽을 수 없다. ROS 2 TF-Luna 전용 노드 하나만
+USB/Serial 장치를 열고 meter 단위 `sensor_msgs/msg/Range` 메시지를
+`/distance/raw`로 발행해야 한다. AI와 대시보드는 같은 시리얼 장치를 다시
+열지 말고 ROS 토픽을 구독해야 한다. 실제 드라이버는 아직 이 브랜치에
+포함되어 있지 않다.
 
 낮은 고도에서는 LiDAR 값이 한 번 튀는 것만으로도 잘못된 접근/후퇴 명령이 나갈 수 있음. 그래서 다음 변수들을 설정할 수 있게 했음.
 
@@ -403,9 +492,8 @@ logs/mission_YYYYMMDD_HHMMSS.jsonl
 
 실제 시험에서는 이 로그를 보고 threshold와 거리 조건을 조정하는 것이 좋음.
 
-ROS 2 Mission Manager는 이 로그와 별도로 미션 상태, PX4 상태, 거리,
-속도, 실패 원인과 운전자 override를 CSV로 자동 저장한다. 두 로그는 목적과
-형식이 다르므로 함께 보존한다.
+ROS 2 Mission Manager는 별도로 미션 상태, PX4 상태, 거리, 속도, 실패
+원인과 운전자 override를 CSV로 자동 저장한다.
 
 ## 테스트
 
@@ -414,7 +502,7 @@ cd daka_rpi
 python -m pytest tests
 ```
 
-현재 `main`의 Python 테스트는 다음을 확인함.
+현재 Python 테스트는 다음을 확인함.
 
 - visual servoing 방향 명령
 - Mission FSM 전이
@@ -424,16 +512,6 @@ python -m pytest tests
 - LiDAR smoothing
 - LiDAR jump rejection
 - legacy live-output 명시적 승인 guard
-
-ROS 2 패키지는 작업 브랜치에서 다음과 같이 별도로 검증한다.
-
-```bash
-cd ros2_ws
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select da_daka_control
-colcon test --packages-select da_daka_control
-colcon test-result --verbose
-```
 
 ## 실제 기체 테스트 전 안전 절차
 

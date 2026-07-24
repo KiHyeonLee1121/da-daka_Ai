@@ -1,0 +1,31 @@
+distance_controller:
+  ros__parameters:
+    input_topic: /distance/filtered
+    command_topic: /mavros/setpoint_velocity/cmd_vel
+    enable_service: /distance_control/enable
+    enabled_state_topic: /distance_control/enabled
+    target_reached_topic: /distance_control/target_reached
+    frame_id: map
+    control_rate_hz: 20.0
+    enabled_on_startup: false
+    require_mavros_connected: true
+    sensor_timeout_s: 0.3
+
+    target_distance_m: 1.0
+    deadband_m: 0.05
+
+    # Start as a conservative P outer loop. Enable I/D only after flight logs.
+    kp: 0.6
+    ki: 0.0
+    kd: 0.0
+    integral_limit: 0.3
+
+    max_vertical_speed_mps: 0.25
+    slow_zone_m: 0.30
+    max_vertical_accel_mps2: 0.5
+
+    # Declare success only after a continuous, settled hold near 1 m.
+    # Allow the observed VM/SITL estimator jitter while still holding near 1 m.
+    target_stable_tolerance_m: 0.08
+    target_stable_duration_s: 5.0
+    target_stable_max_speed_mps: 0.05
