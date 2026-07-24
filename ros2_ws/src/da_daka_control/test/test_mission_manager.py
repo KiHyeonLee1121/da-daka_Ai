@@ -4,6 +4,7 @@ from da_daka_control.mission_manager_node import (
     MissionManagerNode,
     MissionState,
     StableWindow,
+    status_failures,
 )
 
 
@@ -107,3 +108,54 @@ def test_manager_requested_land_is_not_external_override():
         True,
         'AUTO.LAND',
     )
+
+
+def healthy_status(**overrides):
+    """Return status-failure arguments representing a flight-ready vehicle."""
+    values = {
+        'now_s': 10.0,
+        'timeout_s': 2.0,
+        'battery_remaining': 0.8,
+        'battery_time_s': 9.5,
+        'minimum_battery_remaining': 0.3,
+        'landed_state': 1,
+        'extended_state_time_s': 9.5,
+        'require_on_ground': True,
+        'sensors_enabled': 0x3f,
+        'sensors_health': 0x3f,
+        'sys_status_time_s': 9.5,
+        'require_enabled_sensors_healthy': True,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_healthy_status_passes_preflight_gate():
+    assert status_failures(**healthy_status()) == []
+
+
+def test_low_battery_is_rejected():
+    failures = status_failures(
+        **healthy_status(battery_remaining=0.12)
+    )
+    assert any('battery 12% below 30%' in failure for failure in failures)
+
+
+def test_stale_status_and_unhealthy_enabled_sensor_are_rejected():
+    stale = status_failures(**healthy_status(sys_status_time_s=7.0))
+    assert 'PX4 system status unavailable or stale' in stale
+
+    unhealthy = status_failures(
+        **healthy_status(sensors_health=0x1f)
+    )
+    assert any('mask=0x20' in failure for failure in unhealthy)
+
+
+def test_vehicle_must_be_on_ground_only_during_preflight():
+    preflight = status_failures(**healthy_status(landed_state=2))
+    assert any('not confirmed on ground' in failure for failure in preflight)
+
+    inflight = status_failures(
+        **healthy_status(landed_state=2, require_on_ground=False)
+    )
+    assert inflight == []

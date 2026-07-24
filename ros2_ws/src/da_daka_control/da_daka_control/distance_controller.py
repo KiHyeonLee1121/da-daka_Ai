@@ -317,7 +317,26 @@ class DistanceControllerNode(Node):
         request: SetBool.Request,
         response: SetBool.Response,
     ) -> SetBool.Response:
-        self._enabled = bool(request.data)
+        requested = bool(request.data)
+        now = time.monotonic()
+        sensor_fresh = (
+            self._last_sensor_time is not None
+            and now - self._last_sensor_time <= self._sensor_timeout_s
+        )
+        if requested and not sensor_fresh:
+            response.success = False
+            response.message = 'cannot enable: distance sensor unavailable or stale'
+            return response
+        if requested and self._require_mavros and not self._mavros_connected:
+            response.success = False
+            response.message = 'cannot enable: MAVROS disconnected'
+            return response
+        if requested and self._require_mavros and not self._mavros_armed:
+            response.success = False
+            response.message = 'cannot enable: vehicle is disarmed'
+            return response
+
+        self._enabled = requested
         self._pid.reset()
         self._stability_detector.reset()
         self._publish_target_reached(False)
@@ -361,14 +380,21 @@ class DistanceControllerNode(Node):
             self._last_sensor_time is None
             or now - self._last_sensor_time > self._sensor_timeout_s
         )
-        mavros_unavailable = self._require_mavros and not self._mavros_connected
+        mavros_unavailable = self._require_mavros and (
+            not self._mavros_connected or not self._mavros_armed
+        )
         if sensor_stale or mavros_unavailable or self._latest_distance_m is None:
             self._pid.reset()
             self._stability_detector.reset()
             self._publish_target_reached(False)
             self._publish_command(0.0)
             if not self._watchdog_active:
-                reason = 'sensor timeout' if sensor_stale else 'MAVROS disconnected'
+                if sensor_stale:
+                    reason = 'sensor timeout'
+                elif not self._mavros_connected:
+                    reason = 'MAVROS disconnected'
+                else:
+                    reason = 'vehicle disarmed'
                 self.get_logger().warning(f'Holding zero vertical speed: {reason}')
                 self._watchdog_active = True
             return
