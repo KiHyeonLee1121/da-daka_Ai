@@ -1,5 +1,5 @@
-import os
 from glob import glob
+import os
 
 from setuptools import find_packages, setup
 
@@ -37,6 +37,7 @@ setup(
             'distance_controller = da_daka_control.distance_controller:main',
             'virtual_distance_sensor = '
             'da_daka_control.virtual_distance_sensor:main',
+            'tf_luna_serial = da_daka_control.tf_luna_serial:main',
             'mission_manager = da_daka_control.mission_manager_node:main',
         ],
     },

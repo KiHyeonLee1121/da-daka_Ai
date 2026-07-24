@@ -4,9 +4,9 @@ import math
 import time
 from typing import Optional
 
-import rclpy
 from geometry_msgs.msg import TwistStamped
 from mavros_msgs.msg import State
+import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -46,17 +46,17 @@ class DistancePid:
         self.slow_zone_m = slow_zone_m
         self.max_accel_mps2 = max_accel_mps2
         if target_distance_m <= 0.0:
-            raise ValueError("target_distance_m must be greater than zero")
+            raise ValueError('target_distance_m must be greater than zero')
         if deadband_m < 0.0:
-            raise ValueError("deadband_m cannot be negative")
+            raise ValueError('deadband_m cannot be negative')
         if integral_limit < 0.0:
-            raise ValueError("integral_limit cannot be negative")
+            raise ValueError('integral_limit cannot be negative')
         if max_speed_mps <= 0.0:
-            raise ValueError("max_speed_mps must be greater than zero")
+            raise ValueError('max_speed_mps must be greater than zero')
         if slow_zone_m <= 0.0:
-            raise ValueError("slow_zone_m must be greater than zero")
+            raise ValueError('slow_zone_m must be greater than zero')
         if max_accel_mps2 <= 0.0:
-            raise ValueError("max_accel_mps2 must be greater than zero")
+            raise ValueError('max_accel_mps2 must be greater than zero')
         self.reset()
 
     def reset(self) -> None:
@@ -73,7 +73,7 @@ class DistancePid:
         therefore creates a negative command, which moves the vehicle down.
         """
         if dt <= 0.0:
-            raise ValueError("dt must be greater than zero")
+            raise ValueError('dt must be greater than zero')
 
         error = self.target_distance_m - measured_distance_m
         if abs(error) <= self.deadband_m:
@@ -119,11 +119,11 @@ class TargetStabilityDetector:
         max_speed_mps: float,
     ) -> None:
         if tolerance_m <= 0.0:
-            raise ValueError("tolerance_m must be greater than zero")
+            raise ValueError('tolerance_m must be greater than zero')
         if duration_s <= 0.0:
-            raise ValueError("duration_s must be greater than zero")
+            raise ValueError('duration_s must be greater than zero')
         if max_speed_mps < 0.0:
-            raise ValueError("max_speed_mps cannot be negative")
+            raise ValueError('max_speed_mps cannot be negative')
         self.tolerance_m = tolerance_m
         self.duration_s = duration_s
         self.max_speed_mps = max_speed_mps
@@ -160,77 +160,77 @@ class DistanceControllerNode(Node):
     """Publish vertical velocity only while distance control is enabled."""
 
     def __init__(self) -> None:
-        super().__init__("distance_controller")
-        self.declare_parameter("input_topic", "/distance/filtered")
-        self.declare_parameter("command_topic", "/mavros/setpoint_velocity/cmd_vel")
-        self.declare_parameter("enable_service", "/distance_control/enable")
-        self.declare_parameter("enabled_state_topic", "/distance_control/enabled")
+        super().__init__('distance_controller')
+        self.declare_parameter('input_topic', '/distance/filtered')
+        self.declare_parameter('command_topic', '/mavros/setpoint_velocity/cmd_vel')
+        self.declare_parameter('enable_service', '/distance_control/enable')
+        self.declare_parameter('enabled_state_topic', '/distance_control/enabled')
         self.declare_parameter(
-            "target_reached_topic",
-            "/distance_control/target_reached",
+            'target_reached_topic',
+            '/distance_control/target_reached',
         )
-        self.declare_parameter("frame_id", "map")
-        self.declare_parameter("control_rate_hz", 20.0)
-        self.declare_parameter("enabled_on_startup", False)
-        self.declare_parameter("require_mavros_connected", True)
-        self.declare_parameter("sensor_timeout_s", 0.3)
-        self.declare_parameter("target_distance_m", 1.0)
-        self.declare_parameter("deadband_m", 0.05)
-        self.declare_parameter("kp", 0.6)
-        self.declare_parameter("ki", 0.0)
-        self.declare_parameter("kd", 0.0)
-        self.declare_parameter("integral_limit", 0.3)
-        self.declare_parameter("max_vertical_speed_mps", 0.25)
-        self.declare_parameter("slow_zone_m", 0.30)
-        self.declare_parameter("max_vertical_accel_mps2", 0.5)
-        self.declare_parameter("target_stable_tolerance_m", 0.08)
-        self.declare_parameter("target_stable_duration_s", 5.0)
-        self.declare_parameter("target_stable_max_speed_mps", 0.05)
+        self.declare_parameter('frame_id', 'map')
+        self.declare_parameter('control_rate_hz', 20.0)
+        self.declare_parameter('enabled_on_startup', False)
+        self.declare_parameter('require_mavros_connected', True)
+        self.declare_parameter('sensor_timeout_s', 0.3)
+        self.declare_parameter('target_distance_m', 1.0)
+        self.declare_parameter('deadband_m', 0.05)
+        self.declare_parameter('kp', 0.6)
+        self.declare_parameter('ki', 0.0)
+        self.declare_parameter('kd', 0.0)
+        self.declare_parameter('integral_limit', 0.3)
+        self.declare_parameter('max_vertical_speed_mps', 0.25)
+        self.declare_parameter('slow_zone_m', 0.30)
+        self.declare_parameter('max_vertical_accel_mps2', 0.5)
+        self.declare_parameter('target_stable_tolerance_m', 0.08)
+        self.declare_parameter('target_stable_duration_s', 5.0)
+        self.declare_parameter('target_stable_max_speed_mps', 0.05)
 
-        self._input_topic = str(self.get_parameter("input_topic").value)
-        command_topic = str(self.get_parameter("command_topic").value)
-        enable_service = str(self.get_parameter("enable_service").value)
-        enabled_state_topic = str(self.get_parameter("enabled_state_topic").value)
+        self._input_topic = str(self.get_parameter('input_topic').value)
+        command_topic = str(self.get_parameter('command_topic').value)
+        enable_service = str(self.get_parameter('enable_service').value)
+        enabled_state_topic = str(self.get_parameter('enabled_state_topic').value)
         target_reached_topic = str(
-            self.get_parameter("target_reached_topic").value
+            self.get_parameter('target_reached_topic').value
         )
-        self._frame_id = str(self.get_parameter("frame_id").value)
-        self._control_rate_hz = float(self.get_parameter("control_rate_hz").value)
-        self._enabled = bool(self.get_parameter("enabled_on_startup").value)
+        self._frame_id = str(self.get_parameter('frame_id').value)
+        self._control_rate_hz = float(self.get_parameter('control_rate_hz').value)
+        self._enabled = bool(self.get_parameter('enabled_on_startup').value)
         self._require_mavros = bool(
-            self.get_parameter("require_mavros_connected").value
+            self.get_parameter('require_mavros_connected').value
         )
-        self._sensor_timeout_s = float(self.get_parameter("sensor_timeout_s").value)
+        self._sensor_timeout_s = float(self.get_parameter('sensor_timeout_s').value)
 
         if self._control_rate_hz <= 0.0:
-            raise ValueError("control_rate_hz must be greater than zero")
+            raise ValueError('control_rate_hz must be greater than zero')
         if self._sensor_timeout_s <= 0.0:
-            raise ValueError("sensor_timeout_s must be greater than zero")
+            raise ValueError('sensor_timeout_s must be greater than zero')
 
         self._pid = DistancePid(
-            target_distance_m=float(self.get_parameter("target_distance_m").value),
-            deadband_m=float(self.get_parameter("deadband_m").value),
-            kp=float(self.get_parameter("kp").value),
-            ki=float(self.get_parameter("ki").value),
-            kd=float(self.get_parameter("kd").value),
-            integral_limit=float(self.get_parameter("integral_limit").value),
+            target_distance_m=float(self.get_parameter('target_distance_m').value),
+            deadband_m=float(self.get_parameter('deadband_m').value),
+            kp=float(self.get_parameter('kp').value),
+            ki=float(self.get_parameter('ki').value),
+            kd=float(self.get_parameter('kd').value),
+            integral_limit=float(self.get_parameter('integral_limit').value),
             max_speed_mps=float(
-                self.get_parameter("max_vertical_speed_mps").value
+                self.get_parameter('max_vertical_speed_mps').value
             ),
-            slow_zone_m=float(self.get_parameter("slow_zone_m").value),
+            slow_zone_m=float(self.get_parameter('slow_zone_m').value),
             max_accel_mps2=float(
-                self.get_parameter("max_vertical_accel_mps2").value
+                self.get_parameter('max_vertical_accel_mps2').value
             ),
         )
         self._stability_detector = TargetStabilityDetector(
             tolerance_m=float(
-                self.get_parameter("target_stable_tolerance_m").value
+                self.get_parameter('target_stable_tolerance_m').value
             ),
             duration_s=float(
-                self.get_parameter("target_stable_duration_s").value
+                self.get_parameter('target_stable_duration_s').value
             ),
             max_speed_mps=float(
-                self.get_parameter("target_stable_max_speed_mps").value
+                self.get_parameter('target_stable_max_speed_mps').value
             ),
         )
         self._latest_distance_m: Optional[float] = None
@@ -238,7 +238,7 @@ class DistanceControllerNode(Node):
         self._last_control_time = time.monotonic()
         self._mavros_connected = False
         self._mavros_armed = False
-        self._mavros_mode = ""
+        self._mavros_mode = ''
         self._watchdog_active = False
         self._target_reached = False
 
@@ -249,12 +249,12 @@ class DistanceControllerNode(Node):
         )
         self._error_publisher = self.create_publisher(
             Float32,
-            "/distance_control/error",
+            '/distance_control/error',
             10,
         )
         self._speed_publisher = self.create_publisher(
             Float32,
-            "/distance_control/vertical_speed_cmd",
+            '/distance_control/vertical_speed_cmd',
             10,
         )
         state_qos = QoSProfile(
@@ -280,7 +280,7 @@ class DistanceControllerNode(Node):
         )
         self._state_subscription = self.create_subscription(
             State,
-            "/mavros/state",
+            '/mavros/state',
             self._state_callback,
             10,
         )
@@ -294,10 +294,10 @@ class DistanceControllerNode(Node):
             self._control_callback,
         )
         self.get_logger().info(
-            "Distance controller ready (default OFF); "
-            f"target={self._pid.target_distance_m:.2f} m, "
-            f"deadband=+/-{self._pid.deadband_m:.2f} m, "
-            f"max_speed={self._pid.max_speed_mps:.2f} m/s"
+            'Distance controller ready (default OFF); '
+            f'target={self._pid.target_distance_m:.2f} m, '
+            f'deadband=+/-{self._pid.deadband_m:.2f} m, '
+            f'max_speed={self._pid.max_speed_mps:.2f} m/s'
         )
         self._publish_enabled_state()
         self._publish_target_reached(False)
@@ -326,8 +326,8 @@ class DistanceControllerNode(Node):
         if not self._enabled:
             self._publish_command(0.0)
         self._publish_enabled_state()
-        state_text = "enabled" if self._enabled else "disabled"
-        self.get_logger().info(f"Distance control {state_text}")
+        state_text = 'enabled' if self._enabled else 'disabled'
+        self.get_logger().info(f'Distance control {state_text}')
         response.success = True
         response.message = state_text
         return response
@@ -337,8 +337,8 @@ class DistanceControllerNode(Node):
 
     def _publish_target_reached(self, reached: bool) -> None:
         if reached != self._target_reached:
-            state_text = "reached" if reached else "lost"
-            self.get_logger().info(f"Stable distance target {state_text}")
+            state_text = 'reached' if reached else 'lost'
+            self.get_logger().info(f'Stable distance target {state_text}')
         self._target_reached = reached
         self._target_reached_publisher.publish(Bool(data=reached))
 
@@ -368,8 +368,8 @@ class DistanceControllerNode(Node):
             self._publish_target_reached(False)
             self._publish_command(0.0)
             if not self._watchdog_active:
-                reason = "sensor timeout" if sensor_stale else "MAVROS disconnected"
-                self.get_logger().warning(f"Holding zero vertical speed: {reason}")
+                reason = 'sensor timeout' if sensor_stale else 'MAVROS disconnected'
+                self.get_logger().warning(f'Holding zero vertical speed: {reason}')
                 self._watchdog_active = True
             return
 
@@ -382,7 +382,7 @@ class DistanceControllerNode(Node):
             or (
                 self._mavros_connected
                 and self._mavros_armed
-                and self._mavros_mode == "OFFBOARD"
+                and self._mavros_mode == 'OFFBOARD'
             )
         )
         reached = self._stability_detector.update(
@@ -408,5 +408,5 @@ def main(args=None) -> None:
             rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

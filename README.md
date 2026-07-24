@@ -15,7 +15,7 @@ Raspberry Pi 5가 기체 탑재 제어 컴퓨터 역할을 하는 방식으로 �
                  ↕ Wi-Fi UDP MAVLink
 Raspberry Pi 5
   ├─ mavlink-router
-  ├─ ROS 2 Humble / MAVROS
+  ├─ ROS 2 Jazzy / MAVROS
   ├─ TF-Luna 거리 입력, 필터, 1 m 거리제어
   ├─ 단일 Mission Manager
   ├─ 카메라 및 오염 검출
@@ -66,12 +66,11 @@ Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
 
 - 기존 Python MVP 테스트: 18 passed, 2 skipped
 - ROS 2 `da_daka_control` 테스트: 22 passed, 1 skipped
-- ROS 2 Humble `colcon build`, package 설치 및 launch 인자 확인 완료
+- ROS 2 Jazzy `colcon build`, package 설치 및 launch 인자 확인 완료
 
 아직 남은 실기체 통합:
 
-- TF-Luna 9-byte 바이너리 프레임을 읽어 `/distance/raw`로 발행하는 전용
-  ROS 2 드라이버
+- TF-Luna 드라이버의 실제 표면별 신호 세기와 거리 안정성 검증
 - Raspberry Pi–Pixhawk Serial MAVLink 장치명과 baud rate 확정
 - MAVROS, mavlink-router, QGC UDP endpoint 실기체 검증
 - AI 오염 검출 결과를 이동 명령으로 바꾸는 ROS 인터페이스
@@ -246,11 +245,12 @@ daka_rpi/
 
 ## ROS 2 거리제어 패키지
 
-기준 환경은 Raspberry Pi 5의 Ubuntu 22.04 arm64와 ROS 2 Humble이다.
+기준 환경은 Raspberry Pi 5의 Debian 13 arm64 호스트와 Ubuntu 24.04 기반
+컨테이너에서 실행하는 ROS 2 Jazzy이다.
 
 ```bash
 cd ros2_ws
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --packages-select da_daka_control
 source install/setup.bash
@@ -356,13 +356,11 @@ lidar:
 
 Mock LiDAR는 설정된 거리값에 약간의 노이즈를 넣어 반환합니다. 실제 LiDAR가 없어도 FSM과 visual servoing 흐름을 테스트할 수 있음.
 
-실제 장착 센서는 TF-Luna로 확정됐다. 현재 Python
-`SerialLiDARReader`는 일반적인 ASCII line parser이므로 TF-Luna의 9-byte
-바이너리 프레임을 올바르게 읽을 수 없다. ROS 2 TF-Luna 전용 노드 하나만
-USB/Serial 장치를 열고 meter 단위 `sensor_msgs/msg/Range` 메시지를
-`/distance/raw`로 발행해야 한다. AI와 대시보드는 같은 시리얼 장치를 다시
-열지 말고 ROS 토픽을 구독해야 한다. 실제 드라이버는 아직 이 브랜치에
-포함되어 있지 않다.
+실제 장착 센서는 TF-Luna로 확정됐다. `tf_luna_serial` ROS 2 노드 하나만
+USB/Serial 장치를 열고 9-byte 바이너리 프레임과 checksum을 검증해 meter
+단위 `sensor_msgs/msg/Range` 메시지를 `/distance/raw`로 발행한다. 기존
+Python `SerialLiDARReader`는 ASCII 장치용으로만 유지한다. AI와 대시보드는
+같은 시리얼 장치를 다시 열지 말고 ROS 토픽을 구독해야 한다.
 
 낮은 고도에서는 LiDAR 값이 한 번 튀는 것만으로도 잘못된 접근/후퇴 명령이 나갈 수 있음. 그래서 다음 변수들을 설정할 수 있게 했음.
 
@@ -538,7 +536,7 @@ python -m pytest tests
 - `config/params.yaml`: 기존 AI 검출, ROI와 dry-run 설정 조정
 - `control/visual_servo.py`: ROS 이동명령 인터페이스가 확정될 때까지
   dry-run 검증에만 사용
-- ROS 2 TF-Luna 노드: 실제 바이너리 프레임 수신과 `/distance/raw` 발행
+- ROS 2 TF-Luna 노드의 실제 표면별 신호 세기와 거리 안정성 검증
 - `ros2_ws/src/da_daka_control/config`: 1.0 m 거리제어와 Mission Manager
   설정 조정
 - `mavlink-router.conf`: Pixhawk Serial, MAVROS local UDP, QGC remote UDP

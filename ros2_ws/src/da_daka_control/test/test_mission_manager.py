@@ -9,22 +9,22 @@ from da_daka_control.mission_manager_node import (
 
 def test_all_required_states_exist():
     expected = {
-        "IDLE",
-        "PRECHECK",
-        "ARMING",
-        "TAKEOFF",
-        "WAIT_HOVER",
-        "CHECK_SENSOR",
-        "PRESTREAM_SETPOINT",
-        "ENABLE_DISTANCE_CONTROL",
-        "ENTER_OFFBOARD",
-        "DISTANCE_CONTROL",
-        "TARGET_HOLD",
-        "LOITER_HANDOVER",
-        "AUTO_LAND",
-        "WAIT_DISARM",
-        "COMPLETE",
-        "ABORT",
+        'IDLE',
+        'PRECHECK',
+        'ARMING',
+        'TAKEOFF',
+        'WAIT_HOVER',
+        'CHECK_SENSOR',
+        'PRESTREAM_SETPOINT',
+        'ENABLE_DISTANCE_CONTROL',
+        'ENTER_OFFBOARD',
+        'DISTANCE_CONTROL',
+        'TARGET_HOLD',
+        'LOITER_HANDOVER',
+        'AUTO_LAND',
+        'WAIT_DISARM',
+        'COMPLETE',
+        'ABORT',
     }
     assert {state.name for state in MissionState} == expected
 
@@ -45,8 +45,8 @@ def test_stable_window_resets_on_false_condition():
 
 
 def test_optional_number_formats_csv_values():
-    assert MissionManagerNode._optional_number(None) == ""
-    assert MissionManagerNode._optional_number(1.25) == "1.250000"
+    assert MissionManagerNode._optional_number(None) == ''
+    assert MissionManagerNode._optional_number(1.25) == '1.250000'
 
 
 def test_takeoff_and_control_states_require_armed_vehicle():
@@ -65,8 +65,8 @@ def test_takeoff_and_control_states_require_armed_vehicle():
 def test_external_mode_override_detected_during_distance_control():
     assert MissionManagerNode._is_external_mode_override(
         MissionState.DISTANCE_CONTROL,
-        "OFFBOARD",
-        "AUTO.LOITER",
+        'OFFBOARD',
+        'AUTO.LOITER',
         True,
     )
 
@@ -74,8 +74,8 @@ def test_external_mode_override_detected_during_distance_control():
 def test_expected_handover_is_not_external_override():
     assert not MissionManagerNode._is_external_mode_override(
         MissionState.LOITER_HANDOVER,
-        "OFFBOARD",
-        "AUTO.LOITER",
+        'OFFBOARD',
+        'AUTO.LOITER',
         True,
     )
 
@@ -83,8 +83,8 @@ def test_expected_handover_is_not_external_override():
 def test_mode_change_before_offboard_is_not_external_override():
     assert not MissionManagerNode._is_external_mode_override(
         MissionState.ENTER_OFFBOARD,
-        "AUTO.LOITER",
-        "AUTO.LAND",
+        'AUTO.LOITER',
+        'AUTO.LAND',
         False,
     )
 
@@ -92,18 +92,18 @@ def test_mode_change_before_offboard_is_not_external_override():
 def test_external_land_during_prestream_is_respected():
     assert MissionManagerNode._is_external_land_override(
         MissionState.PRESTREAM_SETPOINT,
-        "AUTO.LOITER",
-        "AUTO.LAND",
+        'AUTO.LOITER',
+        'AUTO.LAND',
         True,
-        "AUTO.LAND",
+        'AUTO.LAND',
     )
 
 
 def test_manager_requested_land_is_not_external_override():
     assert not MissionManagerNode._is_external_land_override(
         MissionState.AUTO_LAND,
-        "AUTO.LOITER",
-        "AUTO.LAND",
+        'AUTO.LOITER',
+        'AUTO.LAND',
         True,
-        "AUTO.LAND",
+        'AUTO.LAND',
     )

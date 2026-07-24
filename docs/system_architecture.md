@@ -146,11 +146,11 @@ Python FSM을 ROS Mission Manager에 직접 합치지 않는다.
 
 ## Raspberry Pi 이전 전 남은 작업
 
-- Raspberry Pi 운영체제를 Ubuntu 22.04 arm64로 확정
-- ROS 2 Humble과 MAVROS 설치
+- Raspberry Pi 운영체제는 Debian 13 arm64 호스트로 확정
+- Ubuntu 24.04 기반 컨테이너에 ROS 2 Jazzy와 MAVROS 설치
 - Pixhawk 실제 serial 장치 및 baud 확인
 - `mavlink-router`의 local MAVROS/QGC endpoint 설정
-- TF-Luna 전용 frame parser와 `/distance/raw` ROS 노드 구현
+- TF-Luna 전용 frame parser와 `/distance/raw` ROS 노드의 실환경 검증
 - TF-Luna와 카메라의 단일 장치 소유자 확정
 - AI 검출 결과의 ROS 메시지 정의
 - 이동 명령과 분사 서비스 인터페이스 정의

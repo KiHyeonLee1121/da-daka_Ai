@@ -38,11 +38,12 @@
 
 ## 빌드
 
-Raspberry Pi는 Ubuntu 22.04 arm64와 ROS 2 Humble을 기준으로 한다.
+Raspberry Pi는 Debian 13 arm64 호스트와 Ubuntu 24.04 기반 컨테이너에서
+실행하는 ROS 2 Jazzy를 기준으로 한다.
 
 ```bash
 cd <da-daka_Ai 저장소 경로>/ros2_ws
-source /opt/ros/humble/setup.bash
+source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --packages-select da_daka_control
 source install/setup.bash
@@ -55,16 +56,25 @@ colcon test-result --verbose
 1. Pixhawk Serial은 `mavlink-router` 하나만 점유한다.
 2. Raspberry Pi 내부 MAVROS가 router의 로컬 UDP endpoint에 연결된다.
 3. Windows QGC가 router의 원격 UDP endpoint로 텔레메트리를 수신한다.
-4. 실제 TF-Luna 노드가 `/distance/raw`를 meter 단위로 발행한다.
+4. `tf_luna_serial` 노드가 실제 TF-Luna의 9-byte 프레임을 검증하고
+   `/distance/raw`를 meter 단위로 발행한다.
 5. 거리제어는 꺼진 상태여야 한다.
 6. 기체는 Disarm 상태여야 한다.
 7. 처음에는 프로펠러를 제거하고 인터페이스만 검증한다.
 
-이 패키지는 MAVROS나 TF-Luna 드라이버를 자동으로 실행하지 않는다.
-각 연결이 정상임을 먼저 확인한 다음 제어 패키지를 실행한다.
+TF-Luna 드라이버는 별도 launch로 실행하며, 이 노드만 TF-Luna Serial
+장치를 점유해야 한다.
 
 ```bash
-source /opt/ros/humble/setup.bash
+ros2 launch da_daka_control tf_luna_serial.launch.py
+ros2 topic hz /distance/raw
+ros2 topic echo --once /distance/raw
+```
+
+MAVROS와 TF-Luna 연결이 정상임을 먼저 확인한 다음 제어 패키지를 실행한다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
 source <da-daka_Ai 저장소 경로>/ros2_ws/install/setup.bash
 ros2 launch da_daka_control distance_mission.launch.py
 ```
@@ -135,7 +145,8 @@ tail -20 "$latest"
 
 - Raspberry Pi 운영체제와 ROS 2 설치 상태는 아직 이 VM에서 검증할 수 없다.
 - 실제 Pixhawk serial 장치와 baud는 Raspberry Pi에서 확인해야 한다.
-- 실제 TF-Luna parser, topic 단위와 주기는 Raspberry Pi에서 확인해야 한다.
+- 실제 TF-Luna parser는 9-byte 프레임, checksum, meter 변환을 수행한다.
+  실제 표면별 신호 세기와 거리 안정성은 Raspberry Pi에서 확인해야 한다.
 - PX4 OFFBOARD-loss, RC-loss, 데이터링크-loss 설정은 별도 시험이 필요하다.
 - QGC만 Pi를 경유하면 Pi 전원 장애 시 QGC도 끊긴다. 독립 RC 또는
   Pixhawk 직결 비상 링크가 필요하다.
