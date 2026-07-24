@@ -1,17 +1,17 @@
 """Coordinate the DA-DAKA distance-control flight as a non-blocking FSM."""
 
 import csv
-import math
-import time
 from datetime import datetime
-from enum import Enum, auto
+from enum import auto, Enum
+import math
 from pathlib import Path
+import time
 from typing import Callable, Dict, IO, Optional
 
-import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import Altitude, State
 from mavros_msgs.srv import CommandBool, CommandTOL, SetMode
+import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -47,7 +47,7 @@ class StableWindow:
 
     def __init__(self, duration_s: float) -> None:
         if duration_s <= 0.0:
-            raise ValueError("duration_s must be greater than zero")
+            raise ValueError('duration_s must be greater than zero')
         self.duration_s = duration_s
         self._since: Optional[float] = None
 
@@ -111,7 +111,7 @@ class MissionManagerNode(Node):
     }
 
     def __init__(self) -> None:
-        super().__init__("mission_manager")
+        super().__init__('mission_manager')
         self._declare_parameters()
         self._load_parameters()
 
@@ -122,95 +122,95 @@ class MissionManagerNode(Node):
         )
         self._state_publisher = self.create_publisher(
             String,
-            "/mission/state",
+            '/mission/state',
             latched_qos,
         )
         self._result_publisher = self.create_publisher(
             String,
-            "/mission/result",
+            '/mission/result',
             latched_qos,
         )
         self._start_service = self.create_service(
             Trigger,
-            "/mission/start",
+            '/mission/start',
             self._start_callback,
         )
         self._abort_service = self.create_service(
             Trigger,
-            "/mission/abort",
+            '/mission/abort',
             self._abort_callback,
         )
 
         self.create_subscription(
             Range,
-            "/distance/filtered",
+            '/distance/filtered',
             self._range_callback,
             qos_profile_sensor_data,
         )
         self.create_subscription(
             Bool,
-            "/distance_control/enabled",
+            '/distance_control/enabled',
             self._enabled_callback,
             latched_qos,
         )
         self.create_subscription(
             Bool,
-            "/distance_control/target_reached",
+            '/distance_control/target_reached',
             self._target_callback,
             latched_qos,
         )
         self.create_subscription(
             Float32,
-            "/distance_control/error",
+            '/distance_control/error',
             self._control_error_callback,
             10,
         )
         self.create_subscription(
             Float32,
-            "/distance_control/vertical_speed_cmd",
+            '/distance_control/vertical_speed_cmd',
             self._control_command_callback,
             10,
         )
         self.create_subscription(
             State,
-            "/mavros/state",
+            '/mavros/state',
             self._mavros_state_callback,
             10,
         )
         self.create_subscription(
             PoseStamped,
-            "/mavros/local_position/pose",
+            '/mavros/local_position/pose',
             self._pose_callback,
             qos_profile_sensor_data,
         )
         self.create_subscription(
             TwistStamped,
-            "/mavros/local_position/velocity_local",
+            '/mavros/local_position/velocity_local',
             self._velocity_callback,
             qos_profile_sensor_data,
         )
         self.create_subscription(
             Altitude,
-            "/mavros/altitude",
+            '/mavros/altitude',
             self._altitude_callback,
             qos_profile_sensor_data,
         )
 
         self._arming_client = self.create_client(
             CommandBool,
-            "/mavros/cmd/arming",
+            '/mavros/cmd/arming',
         )
         self._takeoff_client = self.create_client(
             CommandTOL,
-            "/mavros/cmd/takeoff",
+            '/mavros/cmd/takeoff',
         )
         self._mode_client = self.create_client(
             SetMode,
-            "/mavros/set_mode",
+            '/mavros/set_mode',
         )
         self._distance_enable_client = self.create_client(
             SetBool,
-            "/distance_control/enable",
+            '/distance_control/enable',
         )
 
         self._state = MissionState.IDLE
@@ -222,22 +222,22 @@ class MissionManagerNode(Node):
         self._takeoff_accepted = False
         self._offboard_confirmed_once = False
         self._operator_override_latched = False
-        self._operator_override_mode = ""
+        self._operator_override_mode = ''
         self._abort_safe_complete_logged = False
         self._prestream_started_s: Optional[float] = None
         self._distance_control_started_s: Optional[float] = None
         self._target_hold_started_s: Optional[float] = None
-        self._abort_reason = ""
+        self._abort_reason = ''
         self._mission_started_s: Optional[float] = None
         self._last_log_sample_s = -math.inf
         self._log_file: Optional[IO[str]] = None
         self._log_writer = None
-        self._log_path = ""
+        self._log_path = ''
 
         self._mavros_received = False
         self._mavros_connected = False
         self._armed = False
-        self._mode = ""
+        self._mode = ''
         self._distance_enabled = False
         self._target_reached = False
         self._control_error_m: Optional[float] = None
@@ -259,108 +259,108 @@ class MissionManagerNode(Node):
             self._tick,
         )
         self._publish_state()
-        self._publish_result("IDLE")
+        self._publish_result('IDLE')
         self.get_logger().info(
-            "Mission manager ready; call /mission/start to begin"
+            'Mission manager ready; call /mission/start to begin'
         )
 
     def _declare_parameters(self) -> None:
-        self.declare_parameter("takeoff_altitude", 1.1)
-        self.declare_parameter("hover_altitude_tolerance", 0.1)
-        self.declare_parameter("hover_max_vertical_speed", 0.1)
-        self.declare_parameter("hover_hold_duration", 2.0)
-        self.declare_parameter("prestream_duration", 2.0)
-        self.declare_parameter("sensor_timeout", 0.3)
-        self.declare_parameter("telemetry_timeout", 0.5)
-        self.declare_parameter("distance_control_timeout", 20.0)
-        self.declare_parameter("target_hold_confirm_duration", 0.2)
-        self.declare_parameter("fsm_rate_hz", 20.0)
-        self.declare_parameter("service_retry_interval", 1.0)
-        self.declare_parameter("max_retries", 3)
-        self.declare_parameter("loiter_mode", "AUTO.LOITER")
-        self.declare_parameter("land_mode", "AUTO.LAND")
-        self.declare_parameter("respect_external_mode_override", True)
-        self.declare_parameter("precheck_timeout", 5.0)
-        self.declare_parameter("arming_timeout", 5.0)
-        self.declare_parameter("takeoff_timeout", 5.0)
-        self.declare_parameter("wait_hover_timeout", 15.0)
-        self.declare_parameter("check_sensor_timeout", 3.0)
-        self.declare_parameter("prestream_timeout", 6.0)
-        self.declare_parameter("enable_timeout", 3.0)
-        self.declare_parameter("offboard_timeout", 5.0)
-        self.declare_parameter("target_hold_timeout", 3.0)
-        self.declare_parameter("loiter_timeout", 5.0)
-        self.declare_parameter("land_timeout", 5.0)
-        self.declare_parameter("wait_disarm_timeout", 30.0)
-        self.declare_parameter("abort_timeout", 30.0)
-        self.declare_parameter("enable_csv_logging", True)
+        self.declare_parameter('takeoff_altitude', 1.1)
+        self.declare_parameter('hover_altitude_tolerance', 0.1)
+        self.declare_parameter('hover_max_vertical_speed', 0.1)
+        self.declare_parameter('hover_hold_duration', 2.0)
+        self.declare_parameter('prestream_duration', 2.0)
+        self.declare_parameter('sensor_timeout', 0.3)
+        self.declare_parameter('telemetry_timeout', 0.5)
+        self.declare_parameter('distance_control_timeout', 20.0)
+        self.declare_parameter('target_hold_confirm_duration', 0.2)
+        self.declare_parameter('fsm_rate_hz', 20.0)
+        self.declare_parameter('service_retry_interval', 1.0)
+        self.declare_parameter('max_retries', 3)
+        self.declare_parameter('loiter_mode', 'AUTO.LOITER')
+        self.declare_parameter('land_mode', 'AUTO.LAND')
+        self.declare_parameter('respect_external_mode_override', True)
+        self.declare_parameter('precheck_timeout', 5.0)
+        self.declare_parameter('arming_timeout', 5.0)
+        self.declare_parameter('takeoff_timeout', 5.0)
+        self.declare_parameter('wait_hover_timeout', 15.0)
+        self.declare_parameter('check_sensor_timeout', 3.0)
+        self.declare_parameter('prestream_timeout', 6.0)
+        self.declare_parameter('enable_timeout', 3.0)
+        self.declare_parameter('offboard_timeout', 5.0)
+        self.declare_parameter('target_hold_timeout', 3.0)
+        self.declare_parameter('loiter_timeout', 5.0)
+        self.declare_parameter('land_timeout', 5.0)
+        self.declare_parameter('wait_disarm_timeout', 30.0)
+        self.declare_parameter('abort_timeout', 30.0)
+        self.declare_parameter('enable_csv_logging', True)
         self.declare_parameter(
-            "log_directory",
-            "~/da_daka_logs/distance_mission",
+            'log_directory',
+            '~/da_daka_logs/distance_mission',
         )
-        self.declare_parameter("telemetry_log_rate_hz", 10.0)
+        self.declare_parameter('telemetry_log_rate_hz', 10.0)
 
     def _load_parameters(self) -> None:
         def value(name: str):
             return self.get_parameter(name).value
 
-        self._takeoff_altitude_m = float(value("takeoff_altitude"))
+        self._takeoff_altitude_m = float(value('takeoff_altitude'))
         self._hover_tolerance_m = float(
-            value("hover_altitude_tolerance")
+            value('hover_altitude_tolerance')
         )
-        self._hover_speed_mps = float(value("hover_max_vertical_speed"))
-        self._hover_hold_s = float(value("hover_hold_duration"))
-        self._prestream_s = float(value("prestream_duration"))
-        self._sensor_timeout_s = float(value("sensor_timeout"))
-        self._telemetry_timeout_s = float(value("telemetry_timeout"))
+        self._hover_speed_mps = float(value('hover_max_vertical_speed'))
+        self._hover_hold_s = float(value('hover_hold_duration'))
+        self._prestream_s = float(value('prestream_duration'))
+        self._sensor_timeout_s = float(value('sensor_timeout'))
+        self._telemetry_timeout_s = float(value('telemetry_timeout'))
         self._control_timeout_s = float(
-            value("distance_control_timeout")
+            value('distance_control_timeout')
         )
         self._target_hold_s = float(
-            value("target_hold_confirm_duration")
+            value('target_hold_confirm_duration')
         )
-        self._fsm_rate_hz = float(value("fsm_rate_hz"))
-        self._request_interval_s = float(value("service_retry_interval"))
-        self._max_retries = int(value("max_retries"))
-        self._loiter_mode = str(value("loiter_mode"))
-        self._land_mode = str(value("land_mode"))
+        self._fsm_rate_hz = float(value('fsm_rate_hz'))
+        self._request_interval_s = float(value('service_retry_interval'))
+        self._max_retries = int(value('max_retries'))
+        self._loiter_mode = str(value('loiter_mode'))
+        self._land_mode = str(value('land_mode'))
         self._respect_external_mode_override = bool(
-            value("respect_external_mode_override")
+            value('respect_external_mode_override')
         )
-        self._enable_csv_logging = bool(value("enable_csv_logging"))
-        self._log_directory = str(value("log_directory"))
+        self._enable_csv_logging = bool(value('enable_csv_logging'))
+        self._log_directory = str(value('log_directory'))
         self._telemetry_log_rate_hz = float(
-            value("telemetry_log_rate_hz")
+            value('telemetry_log_rate_hz')
         )
         self._timeouts = {
-            MissionState.PRECHECK: float(value("precheck_timeout")),
-            MissionState.ARMING: float(value("arming_timeout")),
-            MissionState.TAKEOFF: float(value("takeoff_timeout")),
-            MissionState.WAIT_HOVER: float(value("wait_hover_timeout")),
+            MissionState.PRECHECK: float(value('precheck_timeout')),
+            MissionState.ARMING: float(value('arming_timeout')),
+            MissionState.TAKEOFF: float(value('takeoff_timeout')),
+            MissionState.WAIT_HOVER: float(value('wait_hover_timeout')),
             MissionState.CHECK_SENSOR: float(
-                value("check_sensor_timeout")
+                value('check_sensor_timeout')
             ),
             MissionState.PRESTREAM_SETPOINT: float(
-                value("prestream_timeout")
+                value('prestream_timeout')
             ),
             MissionState.ENABLE_DISTANCE_CONTROL: float(
-                value("enable_timeout")
+                value('enable_timeout')
             ),
             MissionState.ENTER_OFFBOARD: float(
-                value("offboard_timeout")
+                value('offboard_timeout')
             ),
             MissionState.DISTANCE_CONTROL: self._control_timeout_s,
             MissionState.TARGET_HOLD: float(
-                value("target_hold_timeout")
+                value('target_hold_timeout')
             ),
             MissionState.LOITER_HANDOVER: float(
-                value("loiter_timeout")
+                value('loiter_timeout')
             ),
-            MissionState.AUTO_LAND: float(value("land_timeout")),
+            MissionState.AUTO_LAND: float(value('land_timeout')),
             MissionState.WAIT_DISARM: float(
-                value("wait_disarm_timeout")
+                value('wait_disarm_timeout')
             ),
-            MissionState.ABORT: float(value("abort_timeout")),
+            MissionState.ABORT: float(value('abort_timeout')),
         }
         positive_values = [
             self._takeoff_altitude_m,
@@ -375,13 +375,13 @@ class MissionManagerNode(Node):
             self._telemetry_log_rate_hz,
         ]
         if any(item <= 0.0 for item in positive_values):
-            raise ValueError("mission timing and distance values must be > 0")
+            raise ValueError('mission timing and distance values must be > 0')
         if self._hover_speed_mps < 0.0:
-            raise ValueError("hover_max_vertical_speed cannot be negative")
+            raise ValueError('hover_max_vertical_speed cannot be negative')
         if self._max_retries < 0:
-            raise ValueError("max_retries cannot be negative")
+            raise ValueError('max_retries cannot be negative')
         if not self._log_directory:
-            raise ValueError("log_directory cannot be empty")
+            raise ValueError('log_directory cannot be empty')
 
     def _start_callback(
         self,
@@ -391,22 +391,22 @@ class MissionManagerNode(Node):
         if self._state in self.ACTIVE_STATES or self._armed:
             response.success = False
             response.message = (
-                f"mission cannot start from {self._state.name}; "
-                f"armed={self._armed}"
+                f'mission cannot start from {self._state.name}; '
+                f'armed={self._armed}'
             )
             return response
         if self._distance_enabled:
             response.success = False
             response.message = (
-                "mission cannot start while distance control is enabled"
+                'mission cannot start while distance control is enabled'
             )
             return response
         self._reset_mission()
         self._open_log()
-        self._publish_result(f"RUNNING log={self._log_path}")
+        self._publish_result(f'RUNNING log={self._log_path}')
         self._transition(MissionState.PRECHECK)
         response.success = True
-        response.message = "mission start accepted"
+        response.message = 'mission start accepted'
         return response
 
     def _abort_callback(
@@ -414,9 +414,9 @@ class MissionManagerNode(Node):
         _request: Trigger.Request,
         response: Trigger.Response,
     ) -> Trigger.Response:
-        self._abort("operator requested abort")
+        self._abort('operator requested abort')
         response.success = True
-        response.message = "abort accepted; safe landing sequence active"
+        response.message = 'abort accepted; safe landing sequence active'
         return response
 
     def _range_callback(self, message: Range) -> None:
@@ -462,8 +462,8 @@ class MissionManagerNode(Node):
             self._operator_override_latched = True
             self._operator_override_mode = self._mode
             self._abort(
-                f"external AUTO.LAND confirmed: "
-                f"{previous_mode}->{self._mode}"
+                f'external AUTO.LAND confirmed: '
+                f'{previous_mode}->{self._mode}'
             )
             return
         if (
@@ -478,14 +478,14 @@ class MissionManagerNode(Node):
             self._operator_override_latched = True
             self._operator_override_mode = self._mode
             self._abort(
-                f"external PX4 mode override confirmed: "
-                f"{previous_mode}->{self._mode}"
+                f'external PX4 mode override confirmed: '
+                f'{previous_mode}->{self._mode}'
             )
             return
         if (
             self._operator_override_latched
             and self._state == MissionState.ABORT
-            and self._mode != "OFFBOARD"
+            and self._mode != 'OFFBOARD'
         ):
             self._operator_override_mode = self._mode
 
@@ -516,12 +516,12 @@ class MissionManagerNode(Node):
         self._takeoff_accepted = False
         self._offboard_confirmed_once = False
         self._operator_override_latched = False
-        self._operator_override_mode = ""
+        self._operator_override_mode = ''
         self._abort_safe_complete_logged = False
         self._prestream_started_s = None
         self._distance_control_started_s = None
         self._target_hold_started_s = None
-        self._abort_reason = ""
+        self._abort_reason = ''
         self._hover_window.reset()
         self._mission_started_s = time.monotonic()
         self._last_log_sample_s = -math.inf
@@ -538,8 +538,8 @@ class MissionManagerNode(Node):
         return (
             offboard_confirmed_once
             and state in cls.OFFBOARD_CONTROL_STATES
-            and previous_mode == "OFFBOARD"
-            and current_mode != "OFFBOARD"
+            and previous_mode == 'OFFBOARD'
+            and current_mode != 'OFFBOARD'
         )
 
     @classmethod
@@ -580,9 +580,9 @@ class MissionManagerNode(Node):
         if next_state == MissionState.TARGET_HOLD:
             self._target_hold_started_s = None
         self._publish_state()
-        self._write_log_row(f"STATE:{previous.name}->{next_state.name}")
+        self._write_log_row(f'STATE:{previous.name}->{next_state.name}')
         self.get_logger().info(
-            f"FSM {previous.name} -> {next_state.name}"
+            f'FSM {previous.name} -> {next_state.name}'
         )
 
     def _publish_state(self) -> None:
@@ -590,7 +590,7 @@ class MissionManagerNode(Node):
 
     def _publish_result(self, text: str) -> None:
         self._result_publisher.publish(String(data=text))
-        self._write_log_row(f"RESULT:{text}")
+        self._write_log_row(f'RESULT:{text}')
 
     def _sensor_healthy(self, now_s: float) -> bool:
         if self._distance_m is None or self._range_time_s is None:
@@ -636,19 +636,19 @@ class MissionManagerNode(Node):
             and self._state != MissionState.PRECHECK
             and not self._mavros_connected
         ):
-            self._abort("MAVROS disconnected")
+            self._abort('MAVROS disconnected')
             return
         if (
             self._state in self.SENSOR_CRITICAL_STATES
             and not self._sensor_healthy(now_s)
         ):
-            self._abort("distance sensor timeout or invalid range")
+            self._abort('distance sensor timeout or invalid range')
             return
         if (
             self._state in self.ARMED_REQUIRED_STATES
             and not self._armed
         ):
-            self._abort(f"vehicle disarmed unexpectedly in {self._state.name}")
+            self._abort(f'vehicle disarmed unexpectedly in {self._state.name}')
             return
 
         handlers = {
@@ -682,7 +682,7 @@ class MissionManagerNode(Node):
         request = CommandBool.Request()
         request.value = True
         self._request_action(
-            "arm",
+            'arm',
             self._arming_client,
             request,
             lambda response: bool(response.success),
@@ -704,14 +704,14 @@ class MissionManagerNode(Node):
         request.latitude = math.nan
         request.longitude = math.nan
         if self._home_amsl_m is None:
-            self._abort("home AMSL altitude unavailable for relative takeoff")
+            self._abort('home AMSL altitude unavailable for relative takeoff')
             return
         # MAV_CMD_NAV_TAKEOFF expects an absolute global altitude. Keep the
         # ROS parameter relative to home by converting MAVROS AMSL-relative
         # telemetry to the PX4 home AMSL altitude at request time.
         request.altitude = self._home_amsl_m + self._takeoff_altitude_m
         self._request_action(
-            "takeoff",
+            'takeoff',
             self._takeoff_client,
             request,
             self._takeoff_response_accepted,
@@ -747,7 +747,7 @@ class MissionManagerNode(Node):
             request = SetBool.Request()
             request.data = True
             self._request_action(
-                "distance_enable",
+                'distance_enable',
                 self._distance_enable_client,
                 request,
                 lambda response: bool(response.success),
@@ -756,7 +756,7 @@ class MissionManagerNode(Node):
         if self._prestream_started_s is None:
             self._prestream_started_s = now_s
             self.get_logger().info(
-                "Distance controller confirmed enabled; prestream started"
+                'Distance controller confirmed enabled; prestream started'
             )
         if now_s - self._prestream_started_s >= self._prestream_s:
             self._transition(MissionState.ENABLE_DISTANCE_CONTROL)
@@ -768,14 +768,14 @@ class MissionManagerNode(Node):
         request = SetBool.Request()
         request.data = True
         self._request_action(
-            "distance_enable",
+            'distance_enable',
             self._distance_enable_client,
             request,
             lambda response: bool(response.success),
         )
 
     def _tick_offboard(self, _now_s: float) -> None:
-        if self._mode == "OFFBOARD":
+        if self._mode == 'OFFBOARD':
             self._offboard_confirmed_once = True
             self._distance_control_started_s = time.monotonic()
             self._transition(MissionState.DISTANCE_CONTROL)
@@ -787,22 +787,22 @@ class MissionManagerNode(Node):
             self._operator_override_latched = True
             self._operator_override_mode = self._mode
             self._abort(
-                "external AUTO.LAND confirmed before OFFBOARD entry"
+                'external AUTO.LAND confirmed before OFFBOARD entry'
             )
             return
-        self._request_mode("OFFBOARD")
+        self._request_mode('OFFBOARD')
 
     def _tick_distance_control(self, now_s: float) -> None:
         if not self._distance_enabled:
-            self._abort("distance controller unexpectedly disabled")
+            self._abort('distance controller unexpectedly disabled')
             return
-        if self._mode != "OFFBOARD":
+        if self._mode != 'OFFBOARD':
             self._operator_override_latched = (
                 self._respect_external_mode_override
             )
             self._operator_override_mode = self._mode
             self._abort(
-                f"OFFBOARD lost; respecting actual mode={self._mode}"
+                f'OFFBOARD lost; respecting actual mode={self._mode}'
             )
             return
         if (
@@ -810,20 +810,20 @@ class MissionManagerNode(Node):
             and now_s - self._distance_control_started_s
             > self._control_timeout_s
         ):
-            self._abort("distance control exceeded 20 second timeout")
+            self._abort('distance control exceeded 20 second timeout')
             return
         if self._target_reached:
             self._transition(MissionState.TARGET_HOLD)
 
     def _tick_target_hold(self, now_s: float) -> None:
-        if self._mode != "OFFBOARD":
+        if self._mode != 'OFFBOARD':
             self._operator_override_latched = (
                 self._respect_external_mode_override
             )
             self._operator_override_mode = self._mode
             self._abort(
-                f"OFFBOARD lost during target hold; "
-                f"respecting actual mode={self._mode}"
+                f'OFFBOARD lost during target hold; '
+                f'respecting actual mode={self._mode}'
             )
             return
         if not self._target_reached:
@@ -840,7 +840,7 @@ class MissionManagerNode(Node):
             self._request_mode(self._loiter_mode)
             return
         if self._distance_enabled:
-            self._request_distance_enable(False, "distance_disable")
+            self._request_distance_enable(False, 'distance_disable')
             return
         self._transition(MissionState.AUTO_LAND)
 
@@ -854,16 +854,16 @@ class MissionManagerNode(Node):
         if self._armed:
             return
         self._transition(MissionState.COMPLETE)
-        self._publish_result(f"SUCCESS log={self._log_path}")
+        self._publish_result(f'SUCCESS log={self._log_path}')
         self._close_log()
-        self.get_logger().info("Mission complete; vehicle disarmed")
+        self.get_logger().info('Mission complete; vehicle disarmed')
 
     def _request_mode(self, mode: str) -> None:
         request = SetMode.Request()
         request.base_mode = 0
         request.custom_mode = mode
         self._request_action(
-            f"mode:{mode}",
+            f'mode:{mode}',
             self._mode_client,
             request,
             lambda response: bool(response.mode_sent),
@@ -894,12 +894,12 @@ class MissionManagerNode(Node):
             return
         attempts = self._action_attempts.get(action, 0)
         if attempts >= self._max_retries + 1:
-            self._abort(f"{action} exceeded retry limit")
+            self._abort(f'{action} exceeded retry limit')
             return
         if not client.service_is_ready():
             self._last_action_request_s[action] = now_s
             self._action_attempts[action] = attempts + 1
-            self.get_logger().warning(f"{action} service unavailable")
+            self.get_logger().warning(f'{action} service unavailable')
             return
 
         self._pending_action = action
@@ -914,8 +914,8 @@ class MissionManagerNode(Node):
             )
         )
         self.get_logger().info(
-            f"Requested {action} "
-            f"(attempt {self._action_attempts[action]})"
+            f'Requested {action} '
+            f'(attempt {self._action_attempts[action]})'
         )
 
     def _action_done(
@@ -929,11 +929,11 @@ class MissionManagerNode(Node):
         try:
             response = future.result()
         except Exception as error:  # pragma: no cover - transport failure
-            self.get_logger().error(f"{action} service error: {error}")
+            self.get_logger().error(f'{action} service error: {error}')
             return
         if not accepted(response):
             self.get_logger().warning(
-                f"{action} request rejected; waiting for state/retry"
+                f'{action} request rejected; waiting for state/retry'
             )
 
     def _check_state_timeout(self, now_s: float) -> None:
@@ -943,7 +943,7 @@ class MissionManagerNode(Node):
         if now_s - self._state_entered_s <= timeout_s:
             return
         if self._state == MissionState.DISTANCE_CONTROL:
-            self._abort("distance control exceeded 20 second timeout")
+            self._abort('distance control exceeded 20 second timeout')
             return
         if self._state_retry_count < self._max_retries:
             self._state_retry_count += 1
@@ -952,13 +952,13 @@ class MissionManagerNode(Node):
             self._action_attempts.clear()
             self._hover_window.reset()
             self.get_logger().warning(
-                f"{self._state.name} timeout; "
-                f"retry {self._state_retry_count}/{self._max_retries}"
+                f'{self._state.name} timeout; '
+                f'retry {self._state_retry_count}/{self._max_retries}'
             )
             return
         self._abort(
-            f"{self._state.name} timed out after "
-            f"{self._max_retries} retries"
+            f'{self._state.name} timed out after '
+            f'{self._max_retries} retries'
         )
 
     def _abort(self, reason: str) -> None:
@@ -967,20 +967,20 @@ class MissionManagerNode(Node):
         self._abort_reason = reason
         self._transition(MissionState.ABORT)
         self._publish_result(
-            f"ABORTED: {reason}; log={self._log_path}"
+            f'ABORTED: {reason}; log={self._log_path}'
         )
-        self.get_logger().error(f"Mission abort: {reason}")
+        self.get_logger().error(f'Mission abort: {reason}')
 
     def _tick_abort(self, now_s: float) -> None:
         if not self._armed:
             if self._distance_enabled:
                 self._request_distance_enable(
                     False,
-                    "abort_distance_disable",
+                    'abort_distance_disable',
                 )
                 return
             if not self._abort_safe_complete_logged:
-                self._write_log_row("ABORT_SAFE_COMPLETE")
+                self._write_log_row('ABORT_SAFE_COMPLETE')
                 self._abort_safe_complete_logged = True
             self._close_log()
             return
@@ -988,7 +988,7 @@ class MissionManagerNode(Node):
         if (
             self._respect_external_mode_override
             and self._operator_override_latched
-            and self._mode != "OFFBOARD"
+            and self._mode != 'OFFBOARD'
         ):
             # PX4 has already confirmed the QGC/RC/failsafe-selected mode.
             # Never fight that mode or re-enter OFFBOARD. Setpoints may stop
@@ -996,17 +996,17 @@ class MissionManagerNode(Node):
             if self._distance_enabled:
                 self._request_distance_enable(
                     False,
-                    "override_distance_disable",
+                    'override_distance_disable',
                 )
                 return
             if not self._abort_safe_complete_logged:
                 self._write_log_row(
-                    f"EXTERNAL_MODE_OVERRIDE:{self._operator_override_mode}"
+                    f'EXTERNAL_MODE_OVERRIDE:{self._operator_override_mode}'
                 )
                 self._publish_result(
-                    "ABORTED: external mode override retained; "
-                    f"mode={self._operator_override_mode}; "
-                    "operator/PX4 owns recovery"
+                    'ABORTED: external mode override retained; '
+                    f'mode={self._operator_override_mode}; '
+                    'operator/PX4 owns recovery'
                 )
                 self._abort_safe_complete_logged = True
             return
@@ -1019,64 +1019,64 @@ class MissionManagerNode(Node):
         if self._distance_enabled:
             self._request_distance_enable(
                 False,
-                "abort_distance_disable",
+                'abort_distance_disable',
             )
 
         timeout_s = self._timeouts[MissionState.ABORT]
         if now_s - self._state_entered_s > timeout_s:
             self.get_logger().error(
-                "ABORT timeout: AUTO.LAND remains active; "
-                "use QGC/RC emergency procedure"
+                'ABORT timeout: AUTO.LAND remains active; '
+                'use QGC/RC emergency procedure'
             )
             self._state_entered_s = now_s
 
     def _open_log(self) -> None:
         if not self._enable_csv_logging:
-            self._log_path = "disabled"
+            self._log_path = 'disabled'
             return
         directory = Path(self._log_directory).expanduser()
         directory.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        path = directory / f"distance_mission_{timestamp}.csv"
-        self._log_file = path.open("x", newline="", encoding="utf-8")
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        path = directory / f'distance_mission_{timestamp}.csv'
+        self._log_file = path.open('x', newline='', encoding='utf-8')
         self._log_writer = csv.writer(self._log_file)
         self._log_path = str(path)
         self._log_writer.writerow(
             [
-                "wall_time",
-                "elapsed_s",
-                "event",
-                "mission_state",
-                "mavros_connected",
-                "armed",
-                "px4_mode",
-                "distance_m",
-                "control_error_m",
-                "vertical_speed_command_mps",
-                "altitude_m",
-                "relative_altitude_m",
-                "vertical_speed_mps",
-                "distance_enabled",
-                "target_reached",
-                "operator_override_latched",
-                "operator_override_mode",
+                'wall_time',
+                'elapsed_s',
+                'event',
+                'mission_state',
+                'mavros_connected',
+                'armed',
+                'px4_mode',
+                'distance_m',
+                'control_error_m',
+                'vertical_speed_command_mps',
+                'altitude_m',
+                'relative_altitude_m',
+                'vertical_speed_mps',
+                'distance_enabled',
+                'target_reached',
+                'operator_override_latched',
+                'operator_override_mode',
             ]
         )
         self._log_file.flush()
-        self.get_logger().info(f"Mission CSV log: {self._log_path}")
+        self.get_logger().info(f'Mission CSV log: {self._log_path}')
 
     def _write_periodic_log(self, now_s: float) -> None:
         period_s = 1.0 / self._telemetry_log_rate_hz
         if now_s - self._last_log_sample_s < period_s:
             return
         self._last_log_sample_s = now_s
-        self._write_log_row("")
+        self._write_log_row('')
 
     @staticmethod
     def _optional_number(value: Optional[float]):
         if value is None:
-            return ""
-        return f"{value:.6f}"
+            return ''
+        return f'{value:.6f}'
 
     def _write_log_row(self, event: str) -> None:
         if self._log_writer is None or self._log_file is None:
@@ -1089,8 +1089,8 @@ class MissionManagerNode(Node):
         )
         self._log_writer.writerow(
             [
-                datetime.now().astimezone().isoformat(timespec="milliseconds"),
-                f"{elapsed_s:.3f}",
+                datetime.now().astimezone().isoformat(timespec='milliseconds'),
+                f'{elapsed_s:.3f}',
                 event,
                 self._state.name,
                 self._mavros_connected,
@@ -1134,5 +1134,5 @@ def main(args=None) -> None:
             rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

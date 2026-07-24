@@ -10,26 +10,26 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
-    package_share = get_package_share_directory("da_daka_control")
+    package_share = get_package_share_directory('da_daka_control')
     parameter_file = os.path.join(
         package_share,
-        "config",
-        "virtual_distance_sensor.yaml",
+        'config',
+        'virtual_distance_sensor.yaml',
     )
 
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                "mode",
-                default_value="constant",
-                description="Virtual sensor mode",
+                'mode',
+                default_value='constant',
+                description='Virtual sensor mode',
             ),
             Node(
-                package="da_daka_control",
-                executable="virtual_distance_sensor",
-                name="virtual_distance_sensor",
-                output="screen",
-                parameters=[parameter_file, {"mode": LaunchConfiguration("mode")}],
+                package='da_daka_control',
+                executable='virtual_distance_sensor',
+                name='virtual_distance_sensor',
+                output='screen',
+                parameters=[parameter_file, {'mode': LaunchConfiguration('mode')}],
             )
         ]
     )
