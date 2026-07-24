@@ -37,9 +37,11 @@ MAVROS·mavlink-router·QGC UDP 경로를 추가 검증해야 한다.
 > 제어 코드는 아직 `main`에 병합하지 않았다. 현재 `main`에는 작업 내용과
 > 검증 브랜치 링크만 기록한다.
 
-## 지금 구현된 것
+## `main`에 구현된 기존 Python MVP
 
-이 프로젝트는 Raspberry Pi 5에서 바로 실행할 수 있는 단일 Python 프로그램.
+현재 `main`의 실행 코드는 Raspberry Pi 5에서 바로 실행할 수 있는 단일
+Python MVP다. 카메라·AI·거리 조건·분사 흐름을 빠르게 검증하기 위한
+코드이며, 최종 실기체의 비행 모드와 거리제어 명령권자는 아니다.
 
 - 하단 카메라 또는 영상 파일 입력
 - 아크릴 모사 패널 영역 처리
@@ -80,7 +82,7 @@ MAVROS·mavlink-router·QGC UDP 경로를 추가 검증해야 한다.
 - Raspberry Pi 5
 - Raspberry Pi 5 AI HAT+ 13 TOPS
 - 드론 하단 카메라
-- 드론 하단 또는 노즐 축 근처 LiDAR
+- 드론 하단에 장착한 TF-Luna 싱글 포인트 LiDAR
 - 지상 펌프
 - 호스 라인
 - 노즐
@@ -89,15 +91,15 @@ MAVROS·mavlink-router·QGC UDP 경로를 추가 검증해야 한다.
 
 ## Raspberry Pi와 Pixhawk의 역할
 
-Raspberry Pi는 판단을 담당.
+Raspberry Pi는 상위 판단과 ROS 2 제어 컴퓨터 역할을 담당.
 
 - 카메라 프레임 처리
 - 이물질 검출
 - 이물질 중심점 계산
 - 화면 중심과의 오차 계산
-- LiDAR 거리 조건 확인
-- 임무 상태 판단
-- Pixhawk에 상위 명령 전달
+- TF-Luna 거리 수신과 필터링
+- 임무 상태 판단과 거리제어
+- MAVROS를 통해 Pixhawk에 상위 setpoint와 모드 요청 전달
 - 분사 조건 확인
 
 Pixhawk는 비행 안정화를 담당.
@@ -113,26 +115,41 @@ Raspberry Pi가 모터를 직접 제어하지 않음. 이 구조를 지키는 �
 
 이 프로젝트의 첫 목표는 정확한 3D 좌표 복원이 아니라, 실제로 돌아가는 임무 흐름을 만드는 것.
 
-현재 방식은 다음과 같음.
+기존 Python MVP가 검증하는 개념 흐름은 다음과 같음.
 
 1. 이미지에서 이물질 중심점 `(cx, cy)`를 찾는다.
 2. 화면 중심과 얼마나 떨어져 있는지 계산한다.
-3. 이물질이 화면 중앙에 오도록 드론을 조금씩 움직이는 명령을 만든다.
-4. LiDAR 거리값이 목표 범위 안에 들어오면 정지한다.
+3. 이물질이 화면 중앙에 오도록 이동 오차를 계산한다.
+4. ROS 2 비행 제어가 LiDAR 거리값을 목표 범위로 맞추고 정지한다.
 5. 일정 시간 안정적으로 유지되면 짧게 분사한다.
 6. 다시 촬영해서 이물질이 줄었는지 확인한다.
 
-이 방식은 카메라 캘리브레이션, 패널 좌표계, 드론 좌표계 변환이 완성되기 전에도 테스트할 수 있음. 특히 현재처럼 낮은 고도에서 아크릴판을 대상으로 실험하는 단계에서는 이 접근이 더 단순하고 검증하기 쉬움.
+기존 `visual_servo`와 `MavlinkBridge`는 위 흐름을 검증하기 위한 MVP다.
+최종 live 운용에서는 AI가 검출 결과와 정렬 오차를 ROS 토픽으로 제공하고,
+ROS Mission Manager만 비행 순서와 PX4 모드 전환을 관리해야 한다. 두
+프로그램이 동시에 Pixhawk에 live 명령을 보내면 안 된다.
+
+이 방식은 카메라 캘리브레이션, 패널 좌표계, 드론 좌표계 변환이 완성되기
+전에도 테스트할 수 있음. 특히 현재처럼 낮은 고도에서 아크릴판을 대상으로
+실험하는 단계에서는 이 접근이 더 단순하고 검증하기 쉬움.
 
 ## 낮은 고도 테스트 기준
 
-예상 비행 높이는 약 `1.5 m ~ 2.0 m`.
+거리와 고도 기준은 코드 세대별로 구분해야 한다.
 
-매우 낮은 고도에서는 작은 오차도 위험해질 수 있기 때문에 기본 속도 제한을 작게 잡았음. 현재 설정에서는 visual servoing 속도 상한이 `0.12 m/s`임.
+- 기존 Python MVP: 예상 비행 높이 `1.5 m ~ 2.0 m`, LiDAR 목표거리
+  `1.6 m ±0.25 m`, visual servo 속도 상한 `0.12 m/s`
+- ROS 2 거리제어 시험: PX4 local position 기준 상대 이륙고도 `1.1 m`,
+  하향 TF-Luna가 읽는 표면까지의 목표거리 `1.0 m`
+- ROS 2 도달 판정: 거리 오차 `±0.08 m`를 5초 유지
+- ROS 2 거리제어 최대 수직속도: `0.25 m/s`
 
-LiDAR 목표 거리는 기본 `1.6 m`, 허용 오차는 `0.25 m`로 설정되어 있음. 실제 아크릴판 배치와 카메라/노즐 장착 위치에 따라 반드시 다시 조정해야 함.
+`1.1 m`는 PX4 기준 상대 고도이고 `1.0 m`는 LiDAR가 측정한 표면까지의
+거리이므로 같은 값이 아니다. 평평한 지면에서는 비슷하게 보일 수 있지만,
+장착 오프셋과 대상 표면 높이에 따라 달라진다. 기존 `1.6 m` 설정을 ROS 2
+실기체 시험에 그대로 사용하면 안 된다.
 
-## 프로젝트 구조
+## 기존 `main` Python MVP 구조
 
 ```text
 daka_rpi/
@@ -171,7 +188,7 @@ daka_rpi/
   data/sample/
 ```
 
-## 설치
+## 기존 Python MVP 설치
 
 Raspberry Pi OS에서는 가상환경 사용을 권장.
 
@@ -190,7 +207,7 @@ sudo apt install python3-opencv
 pip install PyYAML pytest pyserial pymavlink
 ```
 
-## 실행
+## 기존 Python MVP 실행
 
 기본 카메라 또는 웹캠:
 
@@ -239,7 +256,12 @@ lidar:
 
 Mock LiDAR는 설정된 거리값에 약간의 노이즈를 넣어 반환합니다. 실제 LiDAR가 없어도 FSM과 visual servoing 흐름을 테스트할 수 있음.
 
-실제 LiDAR를 사용할 때는 `SerialLiDARReader`를 기반으로 프로토콜 파서를 바꾸면 됨. 아직 특정 LiDAR 모델을 고정하지 않았기 때문에 현재는 일반적인 line-based parsing 형태로만 들어가 있음.
+실제 센서는 하향 장착한 TF-Luna로 확정됐다. 현재 `main`의
+`SerialLiDARReader`는 일반적인 ASCII line parser이므로 TF-Luna의 9-byte
+바이너리 프레임을 올바르게 읽을 수 없다. 실기체에서는 ROS 2 TF-Luna 전용
+노드 하나만 USB/Serial 장치를 열고 `sensor_msgs/msg/Range` 형식의
+`/distance/raw`를 발행해야 한다. AI와 대시보드는 같은 시리얼 장치를 다시
+열지 말고 ROS 토픽을 구독해야 한다.
 
 낮은 고도에서는 LiDAR 값이 한 번 튀는 것만으로도 잘못된 접근/후퇴 명령이 나갈 수 있음. 그래서 다음 변수들을 설정할 수 있게 했음.
 
@@ -294,9 +316,9 @@ Hailo를 실제로 쓰려면 별도로 해야 할 일이 있음.
 5. `hailo_dirt_detector.py`에 HailoRT 추론 연결
 6. Pi 5에서 FPS와 지연시간 측정
 
-## Mission FSM
+## 기존 AI·분사 Mission FSM
 
-임무 흐름은 상태머신으로 관리함.
+기존 Python MVP의 오염 검출·정렬·분사 흐름은 상태머신으로 관리함.
 
 구현된 상태는 다음과 같음.
 
@@ -312,6 +334,11 @@ Hailo를 실제로 쓰려면 별도로 해야 할 일이 있음.
 - `DONE`
 - `RETRY`
 - `ABORT`
+
+이 FSM은 최종 비행 모드 관리자와 역할이 다르다. ROS 2
+`mission_manager`가 Arm, 이륙, hover, OFFBOARD, 거리제어, Loiter, Land,
+Disarm을 담당하고, 기존 FSM은 향후 오염 검출과 분사 작업을 요청하는 하위
+작업 FSM으로 연결해야 한다.
 
 분사는 아무 때나 발생하지 않습니다. 최소한 아래 조건을 통과해야 함.
 
@@ -339,7 +366,7 @@ Hailo를 실제로 쓰려면 별도로 해야 할 일이 있음.
 
 ## 로그
 
-`debug.save_logs: true`이면 실행 로그가 저장됨.
+기존 Python MVP에서 `debug.save_logs: true`이면 실행 로그가 저장됨.
 
 ```text
 logs/mission_YYYYMMDD_HHMMSS.csv
@@ -364,6 +391,10 @@ logs/mission_YYYYMMDD_HHMMSS.jsonl
 
 실제 시험에서는 이 로그를 보고 threshold와 거리 조건을 조정하는 것이 좋음.
 
+ROS 2 Mission Manager는 이 로그와 별도로 미션 상태, PX4 상태, 거리,
+속도, 실패 원인과 운전자 override를 CSV로 자동 저장한다. 두 로그는 목적과
+형식이 다르므로 함께 보존한다.
+
 ## 테스트
 
 ```bash
@@ -371,7 +402,7 @@ cd daka_rpi
 python -m pytest tests
 ```
 
-현재 테스트는 다음을 확인함.
+현재 `main`의 Python 테스트는 다음을 확인함.
 
 - visual servoing 방향 명령
 - Mission FSM 전이
@@ -380,6 +411,16 @@ python -m pytest tests
 - LiDAR 거리 범위 검증
 - LiDAR smoothing
 - LiDAR jump rejection
+
+ROS 2 패키지는 작업 브랜치에서 다음과 같이 별도로 검증한다.
+
+```bash
+cd ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select da_daka_control
+colcon test --packages-select da_daka_control
+colcon test-result --verbose
+```
 
 ## 실제 기체 테스트 전 안전 절차
 
@@ -393,17 +434,26 @@ python -m pytest tests
 6. mock 분사 테스트
 7. 프로펠러 제거 상태에서 실제 분사 액추에이터 테스트
 8. 계류 상태에서 기체 반응 확인
-9. `1.5 m ~ 2.0 m` 범위의 저속, 저고도 시험
-10. 축 방향, failsafe, 분사 조건을 모두 확인한 뒤 live output 활성화
+9. 상대 이륙고도 `1.1 m`와 LiDAR 목표거리 `1.0 m`의 의미와 장착
+   오프셋 확인
+10. QGC Hold/Land 개입 시 OFFBOARD 자동 재진입이 차단되는지 확인
+11. 축 방향, failsafe, 분사 조건을 모두 확인한 뒤 제한된 공간에서 저속
+    비행시험
 
 ## 실제 하드웨어 연결 시 수정할 곳
 
 실제 장비를 붙일 때는 아래 파일들을 우선 확인하면 됨.
 
-- `config/params.yaml`: 거리, 속도, ROI, detector threshold 조정
-- `control/visual_servo.py`: 실제 드론 기준 축 방향 보정
-- `sensors/lidar_reader.py`: 실제 LiDAR 프로토콜 파서 구현
-- `control/mavlink_bridge.py`: Pixhawk 모드와 velocity setpoint 방식 확인
+- `config/params.yaml`: 기존 AI 검출, ROI와 dry-run 설정 조정
+- `control/visual_servo.py`: ROS 이동명령 인터페이스가 확정될 때까지
+  dry-run 검증에만 사용
+- ROS 2 TF-Luna 노드: 실제 바이너리 프레임 수신과 `/distance/raw` 발행
+- `ros2_ws/src/da_daka_control/config`: 1.0 m 거리제어와 Mission Manager
+  설정 조정
+- `mavlink-router.conf`: Pixhawk Serial, MAVROS local UDP, QGC remote UDP
+  endpoint 확정
+- `control/mavlink_bridge.py`: 최종 live 구조에서는 비활성화하고, ROS 2
+  Mission Manager와 동시에 실행하지 않음
 - `actuator/spray_command.py`: GPIO 또는 MAVLink actuator command 연결
 - `vision/panel_detector.py`: 필요하면 전체 화면 ROI 대신 패널 윤곽 검출 추가
 - `vision/hailo_dirt_detector.py`: Hailo HEF 모델 추론 연결
