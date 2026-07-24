@@ -29,7 +29,7 @@
 - 기존 Python MVP와 ROS 2 제어가 동시에 PX4에 live 명령을 보내지 않도록
   통합 원칙 문서화
 
-검증 결과는 기존 Python MVP `14 passed, 2 skipped`, ROS 2 패키지
+검증 결과는 기존 Python MVP `18 passed, 2 skipped`, ROS 2 패키지
 `22 passed, 1 skipped`이며 ROS 2 Humble `colcon build`도 완료했다.
 실기체 적용 전에는 TF-Luna 전용 ROS 2 드라이버, Pixhawk Serial MAVLink,
 MAVROS·mavlink-router·QGC UDP 경로를 추가 검증해야 한다.
@@ -245,6 +245,18 @@ python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-ru
 
 실제 기체와 분사 장치를 연결하기 전까지는 이 값을 유지하는 것이 좋음.
 
+설정 파일에서 `mavlink.dry_run` 또는 `spray.dry_run`을 `false`로 바꾸는
+것만으로는 live 출력이 활성화되지 않는다. 기존 Python MVP의 실수로 인한
+명령 충돌을 막기 위해 프로그램이 시작을 거부한다. 승인된 프로펠러 제거
+bench test에서만 다음 명시적 옵션을 추가할 수 있다.
+
+```bash
+python main.py --config config/params.yaml --allow-legacy-live-output
+```
+
+이 옵션을 사용한 Python MVP와 ROS 2 Mission Manager를 동시에 실행하면
+안 된다.
+
 ## LiDAR 처리
 
 기본 LiDAR backend는 mock임.
@@ -411,6 +423,7 @@ python -m pytest tests
 - LiDAR 거리 범위 검증
 - LiDAR smoothing
 - LiDAR jump rejection
+- legacy live-output 명시적 승인 guard
 
 ROS 2 패키지는 작업 브랜치에서 다음과 같이 별도로 검증한다.
 

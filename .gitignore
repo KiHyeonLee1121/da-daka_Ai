@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# ROS 2 / colcon
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+build/
+install/
+log/
+
+# Runtime output
+.runtime/
+logs/*.csv
+logs/*.jsonl
+logs/*.ulg
+logs/*.tlog
+logs/*.mp4
+
+# Frontend
+dashboard/node_modules/
+dashboard/dist/
+
+# Local configuration and editor files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+*~
+*.swp
