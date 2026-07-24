@@ -8,6 +8,9 @@
 
 - 비행 중 OFFBOARD setpoint 발행자는 이 패키지의 거리제어 노드 하나다.
 - 전체 비행 순서는 `mission_manager` 하나만 관리한다.
+- 거리제어 노드는 PX4 모드를 변경하거나 스스로 비활성화하지 않는다.
+  `target_reached`만 발행하고, Mission Manager가 AUTO.LOITER를 확인한
+  뒤 `/distance_control/enable`을 `false`로 전환한다.
 - AI 노드와 분사 노드는 직접 MAVLink 비행 명령을 발행하지 않는다.
 - 대시보드는 실제 명령 연동을 검증하기 전까지 읽기 전용으로 둔다.
 - QGC/RC/PX4가 OFFBOARD를 해제하면 Mission Manager는 해당 모드를

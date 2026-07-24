@@ -26,6 +26,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="config/params.yaml", help="Path to YAML config")
     parser.add_argument("--video", default=None, help="Video file path; overrides camera.source")
     parser.add_argument("--dry-run", action="store_true", help="Force MAVLink and spray dry-run mode")
+    parser.add_argument(
+        "--allow-legacy-live-output",
+        action="store_true",
+        help=(
+            "Explicitly allow the legacy Python MVP to send live MAVLink or "
+            "spray output; never use together with the ROS 2 Mission Manager"
+        ),
+    )
     parser.add_argument("--no-display", action="store_true", help="Disable OpenCV debug window")
     parser.add_argument("--save-video", action="store_true", help="Save debug overlay MP4")
     parser.add_argument("--max-frames", type=int, default=0, help="Optional loop limit for bench tests")
@@ -40,6 +48,25 @@ def create_detector(config: dict):
     if backend == "opencv":
         return OpenCVDirtDetector(detector_config)
     raise ValueError(f"Unsupported detector backend: {backend}")
+
+
+def validate_legacy_live_output(config: dict, explicitly_allowed: bool) -> None:
+    """Block accidental live output from the superseded Python flight path."""
+    mavlink_live = not bool(config.get("mavlink", {}).get("dry_run", True))
+    spray_live = not bool(config.get("spray", {}).get("dry_run", True))
+    if not (mavlink_live or spray_live):
+        return
+    if not explicitly_allowed:
+        raise RuntimeError(
+            "Legacy live output is blocked. Keep mavlink.dry_run and "
+            "spray.dry_run true, or pass --allow-legacy-live-output only for "
+            "an approved bench test. Never run it with the ROS 2 Mission "
+            "Manager."
+        )
+    logging.warning(
+        "LEGACY LIVE OUTPUT ENABLED: do not run the ROS 2 Mission Manager or "
+        "any other PX4 command publisher at the same time"
+    )
 
 
 def execute_command(mavlink: MavlinkBridge, spray_controller, output):
@@ -85,6 +112,8 @@ def main() -> int:
         set_nested(config, "debug.show_window", False)
     if args.save_video:
         set_nested(config, "debug.save_video", True)
+
+    validate_legacy_live_output(config, args.allow_legacy_live_output)
 
     camera = OpenCVCamera(config.get("camera", {}))
     panel_detector = PanelDetector(config.get("roi", {}))

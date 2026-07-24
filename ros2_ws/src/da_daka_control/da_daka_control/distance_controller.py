@@ -7,7 +7,6 @@ from typing import Optional
 import rclpy
 from geometry_msgs.msg import TwistStamped
 from mavros_msgs.msg import State
-from mavros_msgs.srv import SetMode
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -184,11 +183,9 @@ class DistanceControllerNode(Node):
         self.declare_parameter("max_vertical_speed_mps", 0.25)
         self.declare_parameter("slow_zone_m", 0.30)
         self.declare_parameter("max_vertical_accel_mps2", 0.5)
-        self.declare_parameter("target_stable_tolerance_m", 0.05)
+        self.declare_parameter("target_stable_tolerance_m", 0.08)
         self.declare_parameter("target_stable_duration_s", 5.0)
         self.declare_parameter("target_stable_max_speed_mps", 0.05)
-        self.declare_parameter("auto_disable_on_target_reached", True)
-        self.declare_parameter("auto_disable_handoff_mode", "AUTO.LOITER")
 
         self._input_topic = str(self.get_parameter("input_topic").value)
         command_topic = str(self.get_parameter("command_topic").value)
@@ -236,17 +233,6 @@ class DistanceControllerNode(Node):
                 self.get_parameter("target_stable_max_speed_mps").value
             ),
         )
-        self._auto_disable_on_target = bool(
-            self.get_parameter("auto_disable_on_target_reached").value
-        )
-        self._handoff_mode = str(
-            self.get_parameter("auto_disable_handoff_mode").value
-        )
-        if self._auto_disable_on_target and not self._handoff_mode:
-            raise ValueError(
-                "auto_disable_handoff_mode cannot be empty when auto-disable is enabled"
-            )
-
         self._latest_distance_m: Optional[float] = None
         self._last_sensor_time: Optional[float] = None
         self._last_control_time = time.monotonic()
@@ -255,8 +241,6 @@ class DistanceControllerNode(Node):
         self._mavros_mode = ""
         self._watchdog_active = False
         self._target_reached = False
-        self._handoff_requested = False
-        self._handoff_request_time = 0.0
 
         self._command_publisher = self.create_publisher(
             TwistStamped,
@@ -305,7 +289,6 @@ class DistanceControllerNode(Node):
             enable_service,
             self._enable_callback,
         )
-        self._set_mode_client = self.create_client(SetMode, "/mavros/set_mode")
         self._timer = self.create_timer(
             1.0 / self._control_rate_hz,
             self._control_callback,
@@ -328,13 +311,6 @@ class DistanceControllerNode(Node):
         self._mavros_connected = bool(message.connected)
         self._mavros_armed = bool(message.armed)
         self._mavros_mode = str(message.mode)
-        if (
-            self._enabled
-            and self._target_reached
-            and self._handoff_requested
-            and self._mavros_mode == self._handoff_mode
-        ):
-            self._complete_target_handoff()
 
     def _enable_callback(
         self,
@@ -344,7 +320,6 @@ class DistanceControllerNode(Node):
         self._enabled = bool(request.data)
         self._pid.reset()
         self._stability_detector.reset()
-        self._handoff_requested = False
         self._publish_target_reached(False)
         self._last_control_time = time.monotonic()
         self._watchdog_active = False
@@ -366,60 +341,6 @@ class DistanceControllerNode(Node):
             self.get_logger().info(f"Stable distance target {state_text}")
         self._target_reached = reached
         self._target_reached_publisher.publish(Bool(data=reached))
-
-    def _request_target_handoff(self, now_s: float) -> None:
-        """Request a safe PX4 hold mode before stopping OFFBOARD commands."""
-        if self._mavros_mode == self._handoff_mode:
-            self._handoff_requested = True
-            self._complete_target_handoff()
-            return
-        if self._handoff_requested:
-            return
-        if now_s - self._handoff_request_time < 1.0:
-            return
-        self._handoff_request_time = now_s
-        if not self._set_mode_client.service_is_ready():
-            self.get_logger().warning(
-                "Target reached, but /mavros/set_mode is unavailable; "
-                "keeping distance control enabled"
-            )
-            return
-        request = SetMode.Request()
-        request.base_mode = 0
-        request.custom_mode = self._handoff_mode
-        self._handoff_requested = True
-        future = self._set_mode_client.call_async(request)
-        future.add_done_callback(self._handoff_response_callback)
-        self.get_logger().info(
-            f"Target reached; requesting {self._handoff_mode} before auto-disable"
-        )
-
-    def _handoff_response_callback(self, future) -> None:
-        try:
-            response = future.result()
-        except Exception as error:  # pragma: no cover - ROS transport failure
-            self.get_logger().error(f"Mode handoff request failed: {error}")
-            self._handoff_requested = False
-            return
-        if not response.mode_sent:
-            self.get_logger().warning(
-                f"PX4 rejected {self._handoff_mode}; "
-                "keeping distance control enabled"
-            )
-            self._handoff_requested = False
-
-    def _complete_target_handoff(self) -> None:
-        """Disable distance correction only after PX4 confirms hold mode."""
-        if not self._enabled:
-            return
-        self._enabled = False
-        self._pid.reset()
-        self._stability_detector.reset()
-        self._publish_command(0.0)
-        self._publish_enabled_state()
-        self.get_logger().info(
-            f"PX4 confirmed {self._handoff_mode}; distance control auto-disabled"
-        )
 
     def _publish_command(self, vertical_speed_mps: float) -> None:
         command = TwistStamped()
@@ -471,8 +392,6 @@ class DistanceControllerNode(Node):
             flight_state_valid=flight_state_valid,
         )
         self._publish_target_reached(reached)
-        if reached and self._auto_disable_on_target:
-            self._request_target_handoff(now)
 
 
 def main(args=None) -> None:

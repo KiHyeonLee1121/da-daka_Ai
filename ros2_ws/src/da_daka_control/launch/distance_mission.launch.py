@@ -40,10 +40,7 @@ def generate_launch_description() -> LaunchDescription:
                 executable="distance_controller",
                 name="distance_controller",
                 output="screen",
-                parameters=[
-                    controller_config,
-                    {"auto_disable_on_target_reached": False},
-                ],
+                parameters=[controller_config],
             ),
             Node(
                 package="da_daka_control",

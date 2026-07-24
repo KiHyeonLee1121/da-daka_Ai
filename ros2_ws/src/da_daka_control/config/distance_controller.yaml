@@ -29,5 +29,3 @@ distance_controller:
     target_stable_tolerance_m: 0.08
     target_stable_duration_s: 5.0
     target_stable_max_speed_mps: 0.05
-    auto_disable_on_target_reached: true
-    auto_disable_handoff_mode: AUTO.LOITER
