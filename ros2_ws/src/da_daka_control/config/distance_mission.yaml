@@ -11,7 +11,11 @@ mission_manager:
     # Health and total distance-control limits
     sensor_timeout: 0.3
     telemetry_timeout: 0.5
+    status_timeout: 2.0
     distance_control_timeout: 20.0
+    minimum_battery_remaining: 0.30
+    require_on_ground_at_start: true
+    require_enabled_sensors_healthy: true
 
     # Non-blocking FSM and retry policy
     fsm_rate_hz: 20.0

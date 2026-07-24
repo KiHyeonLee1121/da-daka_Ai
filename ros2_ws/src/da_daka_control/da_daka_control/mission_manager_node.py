@@ -9,14 +9,14 @@ import time
 from typing import Callable, Dict, IO, Optional
 
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.msg import Altitude, State
+from mavros_msgs.msg import Altitude, ExtendedState, State, SysStatus
 from mavros_msgs.srv import CommandBool, CommandTOL, SetMode
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Range
+from sensor_msgs.msg import BatteryState, Range
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import SetBool, Trigger
 
@@ -63,6 +63,54 @@ class StableWindow:
         if self._since is None:
             self._since = now_s
         return now_s - self._since >= self.duration_s
+
+
+def status_failures(
+    *,
+    now_s: float,
+    timeout_s: float,
+    battery_remaining: Optional[float],
+    battery_time_s: Optional[float],
+    minimum_battery_remaining: float,
+    landed_state: Optional[int],
+    extended_state_time_s: Optional[float],
+    require_on_ground: bool,
+    sensors_enabled: Optional[int],
+    sensors_health: Optional[int],
+    sys_status_time_s: Optional[float],
+    require_enabled_sensors_healthy: bool,
+) -> list[str]:
+    """Return actionable PX4 status failures for mission gating."""
+    failures = []
+    if battery_time_s is None or now_s - battery_time_s > timeout_s:
+        failures.append('battery telemetry unavailable or stale')
+    elif battery_remaining is None:
+        failures.append('battery remaining is invalid')
+    elif battery_remaining < minimum_battery_remaining:
+        failures.append(
+            f'battery {battery_remaining:.0%} below '
+            f'{minimum_battery_remaining:.0%}'
+        )
+
+    if extended_state_time_s is None or (
+        now_s - extended_state_time_s > timeout_s
+    ):
+        failures.append('extended state unavailable or stale')
+    elif require_on_ground and landed_state != 1:
+        failures.append(f'vehicle is not confirmed on ground ({landed_state})')
+
+    if require_enabled_sensors_healthy:
+        if sys_status_time_s is None or now_s - sys_status_time_s > timeout_s:
+            failures.append('PX4 system status unavailable or stale')
+        elif sensors_enabled is None or sensors_health is None:
+            failures.append('PX4 sensor health is unavailable')
+        else:
+            unhealthy_mask = sensors_enabled & ~sensors_health
+            if unhealthy_mask:
+                failures.append(
+                    f'PX4 enabled sensors unhealthy (mask=0x{unhealthy_mask:x})'
+                )
+    return failures
 
 
 class MissionManagerNode(Node):
@@ -195,6 +243,24 @@ class MissionManagerNode(Node):
             self._altitude_callback,
             qos_profile_sensor_data,
         )
+        self.create_subscription(
+            BatteryState,
+            '/mavros/battery',
+            self._battery_callback,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            ExtendedState,
+            '/mavros/extended_state',
+            self._extended_state_callback,
+            10,
+        )
+        self.create_subscription(
+            SysStatus,
+            '/mavros/sys_status',
+            self._sys_status_callback,
+            10,
+        )
 
         self._arming_client = self.create_client(
             CommandBool,
@@ -252,6 +318,13 @@ class MissionManagerNode(Node):
         self._vertical_speed_mps: Optional[float] = None
         self._velocity_time_s: Optional[float] = None
         self._home_amsl_m: Optional[float] = None
+        self._battery_remaining: Optional[float] = None
+        self._battery_time_s: Optional[float] = None
+        self._landed_state: Optional[int] = None
+        self._extended_state_time_s: Optional[float] = None
+        self._sensors_enabled: Optional[int] = None
+        self._sensors_health: Optional[int] = None
+        self._sys_status_time_s: Optional[float] = None
         self._hover_window = StableWindow(self._hover_hold_s)
 
         self._timer = self.create_timer(
@@ -272,6 +345,10 @@ class MissionManagerNode(Node):
         self.declare_parameter('prestream_duration', 2.0)
         self.declare_parameter('sensor_timeout', 0.3)
         self.declare_parameter('telemetry_timeout', 0.5)
+        self.declare_parameter('status_timeout', 2.0)
+        self.declare_parameter('minimum_battery_remaining', 0.30)
+        self.declare_parameter('require_on_ground_at_start', True)
+        self.declare_parameter('require_enabled_sensors_healthy', True)
         self.declare_parameter('distance_control_timeout', 20.0)
         self.declare_parameter('target_hold_confirm_duration', 0.2)
         self.declare_parameter('fsm_rate_hz', 20.0)
@@ -313,6 +390,16 @@ class MissionManagerNode(Node):
         self._prestream_s = float(value('prestream_duration'))
         self._sensor_timeout_s = float(value('sensor_timeout'))
         self._telemetry_timeout_s = float(value('telemetry_timeout'))
+        self._status_timeout_s = float(value('status_timeout'))
+        self._minimum_battery_remaining = float(
+            value('minimum_battery_remaining')
+        )
+        self._require_on_ground_at_start = bool(
+            value('require_on_ground_at_start')
+        )
+        self._require_enabled_sensors_healthy = bool(
+            value('require_enabled_sensors_healthy')
+        )
         self._control_timeout_s = float(
             value('distance_control_timeout')
         )
@@ -369,6 +456,7 @@ class MissionManagerNode(Node):
             self._prestream_s,
             self._sensor_timeout_s,
             self._telemetry_timeout_s,
+            self._status_timeout_s,
             self._control_timeout_s,
             self._fsm_rate_hz,
             self._request_interval_s,
@@ -378,6 +466,8 @@ class MissionManagerNode(Node):
             raise ValueError('mission timing and distance values must be > 0')
         if self._hover_speed_mps < 0.0:
             raise ValueError('hover_max_vertical_speed cannot be negative')
+        if not 0.0 <= self._minimum_battery_remaining <= 1.0:
+            raise ValueError('minimum_battery_remaining must be within [0, 1]')
         if self._max_retries < 0:
             raise ValueError('max_retries cannot be negative')
         if not self._log_directory:
@@ -400,6 +490,11 @@ class MissionManagerNode(Node):
             response.message = (
                 'mission cannot start while distance control is enabled'
             )
+            return response
+        failures = self._preflight_failures(time.monotonic())
+        if failures:
+            response.success = False
+            response.message = 'preflight failed: ' + '; '.join(failures)
             return response
         self._reset_mission()
         self._open_log()
@@ -507,6 +602,21 @@ class MissionManagerNode(Node):
         if math.isfinite(amsl) and math.isfinite(relative):
             self._home_amsl_m = amsl - relative
             self._relative_altitude_m = relative
+
+    def _battery_callback(self, message: BatteryState) -> None:
+        remaining = float(message.percentage)
+        if math.isfinite(remaining) and 0.0 <= remaining <= 1.0:
+            self._battery_remaining = remaining
+            self._battery_time_s = time.monotonic()
+
+    def _extended_state_callback(self, message: ExtendedState) -> None:
+        self._landed_state = int(message.landed_state)
+        self._extended_state_time_s = time.monotonic()
+
+    def _sys_status_callback(self, message: SysStatus) -> None:
+        self._sensors_enabled = int(message.sensors_enabled)
+        self._sensors_health = int(message.sensors_health)
+        self._sys_status_time_s = time.monotonic()
 
     def _reset_mission(self) -> None:
         self._close_log()
@@ -616,10 +726,52 @@ class MissionManagerNode(Node):
         )
 
     def _precheck_ready(self, now_s: float) -> bool:
-        return (
-            self._flight_data_healthy(now_s)
-            and self._sensor_healthy(now_s)
-            and self._home_amsl_m is not None
+        return not self._preflight_failures(now_s)
+
+    def _preflight_failures(self, now_s: float) -> list[str]:
+        failures = []
+        if not self._flight_data_healthy(now_s):
+            failures.append('MAVROS pose or velocity telemetry unavailable')
+        if not self._sensor_healthy(now_s):
+            failures.append('distance sensor unavailable or invalid')
+        if self._home_amsl_m is None:
+            failures.append('home AMSL altitude unavailable')
+        failures.extend(
+            status_failures(
+                now_s=now_s,
+                timeout_s=self._status_timeout_s,
+                battery_remaining=self._battery_remaining,
+                battery_time_s=self._battery_time_s,
+                minimum_battery_remaining=self._minimum_battery_remaining,
+                landed_state=self._landed_state,
+                extended_state_time_s=self._extended_state_time_s,
+                require_on_ground=self._require_on_ground_at_start,
+                sensors_enabled=self._sensors_enabled,
+                sensors_health=self._sensors_health,
+                sys_status_time_s=self._sys_status_time_s,
+                require_enabled_sensors_healthy=(
+                    self._require_enabled_sensors_healthy
+                ),
+            )
+        )
+        return failures
+
+    def _inflight_status_failures(self, now_s: float) -> list[str]:
+        return status_failures(
+            now_s=now_s,
+            timeout_s=self._status_timeout_s,
+            battery_remaining=self._battery_remaining,
+            battery_time_s=self._battery_time_s,
+            minimum_battery_remaining=self._minimum_battery_remaining,
+            landed_state=self._landed_state,
+            extended_state_time_s=self._extended_state_time_s,
+            require_on_ground=False,
+            sensors_enabled=self._sensors_enabled,
+            sensors_health=self._sensors_health,
+            sys_status_time_s=self._sys_status_time_s,
+            require_enabled_sensors_healthy=(
+                self._require_enabled_sensors_healthy
+            ),
         )
 
     def _tick(self) -> None:
@@ -637,6 +789,12 @@ class MissionManagerNode(Node):
             and not self._mavros_connected
         ):
             self._abort('MAVROS disconnected')
+            return
+        if (
+            self._state in self.ARMED_REQUIRED_STATES
+            and (status_errors := self._inflight_status_failures(now_s))
+        ):
+            self._abort('PX4 status unhealthy: ' + '; '.join(status_errors))
             return
         if (
             self._state in self.SENSOR_CRITICAL_STATES

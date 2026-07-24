@@ -105,6 +105,9 @@ ros2 topic hz /distance/filtered
 - 거리 목표: 하향 TF-Luna 기준 1.0 m
 - 제어 최대속도: 0.25 m/s
 - 센서 timeout: 0.3 s
+- 상태 텔레메트리 timeout: 2.0 s
+- 시작 최소 배터리: 30%
+- 시작 시 PX4 착륙 상태와 활성 센서 health 확인
 - 목표 판정: 오차 ±0.08 m, 수직속도 0.05 m/s 이하, 연속 5 s
 - 전체 거리제어 timeout: 20 s
 
