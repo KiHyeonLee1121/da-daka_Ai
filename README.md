@@ -4,6 +4,39 @@
 
 처음부터 실제 태양광 패널 현장에 바로 투입하는 프로그램은 아님. 현재 목표는 훨씬 현실적인 쪽. 낮은 고도에서 아크릴 모사 패널을 촬영하고, 화면 안의 이물질 위치를 찾고, LiDAR 거리 조건이 맞을 때만 분사 명령을 내리는 기본 임무 흐름을 먼저 검증.
 
+## 2026-07-24 Raspberry Pi ROS 2 제어구조 개편
+
+노트북 VM에서 실행하던 거리제어 코드를 정리해, 최종적으로 Raspberry Pi
+5에서 ROS 2 Humble, MAVROS와 함께 실행할 수 있는
+`da_daka_control` 패키지를 별도 브랜치에 추가했다.
+
+- 작업 브랜치:
+  [`codex/rpi-ros2-distance-control`](https://github.com/KiHyeonLee1121/da-daka_Ai/tree/codex/rpi-ros2-distance-control)
+- ROS 2 패키지:
+  [`ros2_ws/src/da_daka_control`](https://github.com/KiHyeonLee1121/da-daka_Ai/tree/codex/rpi-ros2-distance-control/ros2_ws/src/da_daka_control)
+- 상세 구조:
+  [`docs/system_architecture.md`](https://github.com/KiHyeonLee1121/da-daka_Ai/blob/codex/rpi-ros2-distance-control/docs/system_architecture.md)
+
+주요 작업:
+
+- 거리 필터, 목표거리 1.0 m 제어, SITL 가상센서 노드 정리
+- Arm부터 이륙, hover, OFFBOARD 거리제어, Loiter, Land, Disarm까지
+  관리하는 Enum 기반 Mission Manager 추가
+- 센서·상태 timeout, 상태 확인, 최대 3회 재시도와 자동 CSV 로그 추가
+- 목표거리 오차 ±0.08 m를 5초 유지하는 도달 판정 추가
+- QGC/RC/PX4 운전자 개입을 우선하고 OFFBOARD 자동 재진입을 막는 안전
+  동작 추가
+- 기존 Python MVP와 ROS 2 제어가 동시에 PX4에 live 명령을 보내지 않도록
+  통합 원칙 문서화
+
+검증 결과는 기존 Python MVP `14 passed, 2 skipped`, ROS 2 패키지
+`22 passed, 1 skipped`이며 ROS 2 Humble `colcon build`도 완료했다.
+실기체 적용 전에는 TF-Luna 전용 ROS 2 드라이버, Pixhawk Serial MAVLink,
+MAVROS·mavlink-router·QGC UDP 경로를 추가 검증해야 한다.
+
+> 제어 코드는 아직 `main`에 병합하지 않았다. 현재 `main`에는 작업 내용과
+> 검증 브랜치 링크만 기록한다.
+
 ## 지금 구현된 것
 
 이 프로젝트는 Raspberry Pi 5에서 바로 실행할 수 있는 단일 Python 프로그램.
