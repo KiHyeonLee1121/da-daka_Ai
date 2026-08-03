@@ -1,0 +1,17 @@
+ai_result_receiver:
+  ros__parameters:
+    bind_address: "0.0.0.0"
+    port: 5005
+    result_topic: "/ai/detection_result"
+    health_topic: "/ai/health"
+    state_topic: "/ai/receiver_state"
+    max_result_age_s: 0.4
+    heartbeat_timeout_s: 1.0
+    minimum_confidence: 0.5
+    allowed_source_id: "laptop-ai-01"
+    # Keep false unless laptop and Pi are synchronized with NTP/chrony.
+    use_sender_timestamp_for_age: false
+    future_timestamp_tolerance_s: 1.0
+    poll_rate_hz: 100.0
+    max_packet_bytes: 4096
+    summary_interval_s: 5.0

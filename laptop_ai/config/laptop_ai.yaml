@@ -1,0 +1,44 @@
+video:
+  source: "http://192.168.0.20:8080/video"
+  backend: "opencv"
+  reconnect_interval_s: 2.0
+  max_consecutive_failures: 30
+  frame_width: 640
+  frame_height: 480
+  process_every_n_frames: 1
+  max_frame_age_s: 0.5
+
+detector:
+  backend: "opencv"
+  confidence_threshold: 0.5
+  model_path: null
+  execution_provider: "cpu"
+  input_width: 640
+  input_height: 640
+  class_id: 0
+  output_format: "xyxy_score_class"
+  coordinates_normalized: false
+  min_area: 80
+  max_area: 50000
+  threshold_mode: "adaptive"
+  reject_specular_highlights: true
+  specular_v_threshold: 245
+  specular_saturation_max: 45
+  ignore_border_px: 4
+  priority_w_area: 0.45
+  priority_w_dist: 0.25
+  priority_w_conf: 0.30
+
+network:
+  destination_host: "192.168.0.20"
+  destination_port: 5005
+  source_id: "laptop-ai-01"
+  send_no_detection: true
+  heartbeat_interval_s: 0.2
+  max_packet_bytes: 4096
+
+debug:
+  show_window: true
+  save_video: false
+  log_level: "INFO"
+  summary_interval_s: 5.0

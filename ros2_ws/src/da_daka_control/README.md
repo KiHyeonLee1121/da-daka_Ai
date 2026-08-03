@@ -12,6 +12,7 @@
   `target_reached`만 발행하고, Mission Manager가 AUTO.LOITER를 확인한
   뒤 `/distance_control/enable`을 `false`로 전환한다.
 - AI 노드와 분사 노드는 직접 MAVLink 비행 명령을 발행하지 않는다.
+- 노트북 AI UDP receiver는 검증된 typed detection과 health 상태만 발행한다.
 - 대시보드는 실제 명령 연동을 검증하기 전까지 읽기 전용으로 둔다.
 - QGC/RC/PX4가 OFFBOARD를 해제하면 Mission Manager는 해당 모드를
   우선하고 OFFBOARD로 재진입하지 않는다.
@@ -35,6 +36,26 @@
 - `/mission/result`
 - `/distance_control/enabled`
 - `/distance_control/target_reached`
+- `/ai/detection_result` (`da_daka_interfaces/msg/DirtDetection`)
+- `/ai/health` (`std_msgs/msg/Bool`)
+- `/ai/receiver_state` (`std_msgs/msg/String` JSON, 향후 Mission Manager 통합 지점)
+
+## 노트북 AI 결과 수신
+
+아래 launch는 UDP 수신과 상태 topic만 시작한다. 자동 Arm, 이륙, OFFBOARD,
+Loiter, Land 또는 분사를 요청하지 않는다.
+
+```bash
+ros2 launch da_daka_control ai_result_receiver.launch.py
+ros2 topic echo /ai/health
+ros2 topic echo /ai/detection_result
+ros2 topic echo /ai/receiver_state
+```
+
+기본 UDP 포트는 5005, 허용 source ID는 `laptop-ai-01`, stale timeout은
+0.4초, heartbeat timeout은 1.0초다. 노트북과 Pi clock이 동기화됐다고
+가정하지 않으므로 기본 freshness는 Pi local monotonic 수신 시각을 사용한다.
+상세 schema와 네트워크 설정은 `docs/laptop_ai_architecture.md`를 참고한다.
 
 ## 빌드
 
@@ -45,9 +66,9 @@ Raspberry Pi는 Debian 13 arm64 호스트와 Ubuntu 24.04 기반 컨테이너에
 cd <da-daka_Ai 저장소 경로>/ros2_ws
 source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install --packages-select da_daka_control
+colcon build --symlink-install --packages-select da_daka_interfaces da_daka_control
 source install/setup.bash
-colcon test --packages-select da_daka_control
+colcon test --packages-select da_daka_interfaces da_daka_control
 colcon test-result --verbose
 ```
 

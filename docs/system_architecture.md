@@ -21,7 +21,7 @@ Raspberry Pi 5
                                    │
                   ┌────────────────┼────────────────┐
                   │                │                │
-            TF-Luna 노드      AI 검출 노드      분사 노드
+            TF-Luna 노드   AI UDP 수신 노드     분사 노드
                   │                │                │
             distance_filter        └──────┬─────────┘
                   │                       │
@@ -103,6 +103,14 @@ QGC/RC/PX4가 OFFBOARD를 해제하면 외부 모드를 우선한다. Mission Ma
 모드를 확인한 뒤 거리 setpoint를 중단하며, 이후 복구와 착륙의 명령권은
 QGC/RC/PX4에 있다.
 
+### 노트북 AI와 Pi 수신 노드
+
+영상 추론은 일반 Python 프로그램인 `laptop_ai`로 분리했다. Pi는 영상
+stream을 제공하고 `ai_result_receiver`가 노트북의 UDP JSON을 검증해 typed
+ROS message와 health/state topic으로 변환한다. 이 노드는 비행 setpoint,
+PX4 mode 또는 분사 명령을 발행하지 않으며 기존 Mission Manager도 아직 AI
+topic을 구독하지 않는다. 상세 구조는 `docs/laptop_ai_architecture.md`에 있다.
+
 ## ROS 2 인터페이스
 
 기존 입력:
@@ -126,9 +134,13 @@ QGC/RC/PX4에 있다.
 | `/mission/result` | `std_msgs/msg/String` | 결과와 실패 원인 |
 | `/distance_control/enabled` | `std_msgs/msg/Bool` | 실제 ON/OFF 상태 |
 | `/distance_control/target_reached` | `std_msgs/msg/Bool` | 거리 안정 도달 |
+| `/ai/detection_result` | `da_daka_interfaces/msg/DirtDetection` | 검증된 오염 검출과 valid/age |
+| `/ai/health` | `std_msgs/msg/Bool` | 노트북 heartbeat 상태 |
+| `/ai/receiver_state` | `std_msgs/msg/String` JSON | fail-closed 상태와 수신 counter |
 
-AI와 분사 통합 토픽·서비스는 아직 확정되지 않았다. 확정 전에는 기존
-Python FSM을 ROS Mission Manager에 직접 합치지 않는다.
+AI 수신 인터페이스는 추가됐지만 이동·분사 정책과 Mission Manager 구독은
+아직 확정되지 않았다. 확정 전에는 기존 Python FSM을 ROS Mission Manager에
+직접 합치지 않는다.
 
 ## 안전 요구사항
 
@@ -152,7 +164,7 @@ Python FSM을 ROS Mission Manager에 직접 합치지 않는다.
 - `mavlink-router`의 local MAVROS/QGC endpoint 설정
 - TF-Luna 전용 frame parser와 `/distance/raw` ROS 노드의 실환경 검증
 - TF-Luna와 카메라의 단일 장치 소유자 확정
-- AI 검출 결과의 ROS 메시지 정의
+- AI 검출 결과를 Mission Manager가 소비할 fail-safe 정책 정의
 - 이동 명령과 분사 서비스 인터페이스 정의
 - 기존 Python FSM과 ROS Mission Manager 중 최종 단일 FSM 확정
 - PX4 OFFBOARD-loss, RC-loss, data-link-loss 설정 및 시험

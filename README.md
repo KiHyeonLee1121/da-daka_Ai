@@ -18,11 +18,17 @@ Raspberry Pi 5
   ├─ ROS 2 Jazzy / MAVROS
   ├─ TF-Luna 거리 입력, 필터, 1 m 거리제어
   ├─ 단일 Mission Manager
-  ├─ 카메라 및 오염 검출
+  ├─ 카메라 영상 stream 송신
+  ├─ 노트북 AI UDP 결과 검증 및 ROS topic 변환
   └─ 분사제어
                  ↕ Serial MAVLink
 Pixhawk 4 / PX4
   └─ 자세 안정화와 저수준 비행제어
+
+Windows/Linux 노트북
+  ├─ Pi 영상 stream 수신
+  ├─ OpenCV 또는 ONNX 오염 검출
+  └─ UDP JSON 검출 결과만 Pi로 송신
 ```
 
 비행 순서와 PX4 모드 전환 권한은 ROS 2 `mission_manager` 하나로
@@ -35,6 +41,11 @@ ROS 2 거리제어를 동시에 live 모드로 실행하면 안 된다. AI 코�
 현재 ROS 2 거리제어 패키지는 `ros2_ws/src/da_daka_control`에 있다.
 상세한 통합 상태, 인터페이스와 남은 작업은
 [`docs/system_architecture.md`](docs/system_architecture.md)를 참고한다.
+
+노트북 추론과 Pi UDP 수신 파이프라인은 `laptop_ai`와
+`da_daka_control/ai_result_receiver.py`에 있다. 네트워크 구성, fail-closed
+동작과 아직 통합하지 않은 기능은
+[`docs/laptop_ai_architecture.md`](docs/laptop_ai_architecture.md)를 참고한다.
 
 ## 2026-07-24 Raspberry Pi 제어구조 개편 작업
 
@@ -200,6 +211,11 @@ daka_rpi/
   main.py
   docs/
     system_architecture.md
+    laptop_ai_architecture.md
+  laptop_ai/
+    config/laptop_ai.yaml
+    laptop_ai/
+    tests/
   config/
     params.yaml
   vision/
@@ -238,6 +254,8 @@ daka_rpi/
         launch/
         resource/
         test/
+      da_daka_interfaces/
+        msg/DirtDetection.msg
 ```
 
 `build/`, `install/`, `log/`, Python 가상환경과 비행 로그는 Git에 포함하지
@@ -252,9 +270,9 @@ daka_rpi/
 cd ros2_ws
 source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install --packages-select da_daka_control
+colcon build --symlink-install --packages-select da_daka_interfaces da_daka_control
 source install/setup.bash
-colcon test --packages-select da_daka_control
+colcon test --packages-select da_daka_interfaces da_daka_control
 colcon test-result --verbose
 ```
 
