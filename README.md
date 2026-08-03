@@ -52,7 +52,8 @@ Windows/Linux 노트북
   └─ UDP JSON 검출 결과만 Pi로 송신
 ```
 
-Windows ONNX 경로는 `execution_provider: auto`에서 CUDA, DirectML, CPU 순으로
+Windows ONNX 경로는 `execution_provider: auto`에서 TensorRT, CUDA, DirectML,
+CPU 순으로
 사용 가능한 provider를 선택한다. AMD/Intel GPU는
 `laptop_ai/requirements-directml.txt`, NVIDIA CUDA는
 `laptop_ai/requirements-cuda.txt`를 사용하며, GPU provider가 없으면 CPU로

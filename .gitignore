@@ -17,6 +17,7 @@ log/
 
 # Runtime output
 .runtime/
+.cache/
 logs/*.csv
 logs/*.jsonl
 logs/*.ulg

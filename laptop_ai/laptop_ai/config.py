@@ -19,6 +19,7 @@ class VideoConfig:
     frame_height: int = 480
     process_every_n_frames: int = 1
     max_frame_age_s: float = 0.5
+    capture_buffer_size: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,12 +69,21 @@ class PerformanceConfig:
 
     opencv_num_threads: int = 0
     opencv_use_opencl: bool = False
+    opencv_use_optimized: bool = True
     onnx_intra_op_threads: int = 0
     onnx_inter_op_threads: int = 0
     onnx_execution_mode: str = "sequential"
     onnx_graph_optimization: str = "all"
     onnx_enable_cpu_mem_arena: bool = True
     onnx_device_id: int = 0
+    onnx_warmup_runs: int = 3
+    onnx_use_io_binding: bool = True
+    onnx_cuda_conv_use_max_workspace: bool = True
+    onnx_cuda_prefer_nhwc: bool = False
+    onnx_tensorrt_fp16: bool = True
+    onnx_tensorrt_engine_cache: bool = True
+    onnx_tensorrt_timing_cache: bool = True
+    onnx_tensorrt_cache_path: str = ".runtime/onnx-tensorrt"
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +151,12 @@ def _validate(
         raise ValueError("video.backend must be 'opencv' or 'gstreamer'")
     if video.reconnect_interval_s <= 0.0 or video.max_consecutive_failures < 1:
         raise ValueError("video reconnect settings must be positive")
-    if min(video.frame_width, video.frame_height, video.process_every_n_frames) < 1:
+    if min(
+        video.frame_width,
+        video.frame_height,
+        video.process_every_n_frames,
+        video.capture_buffer_size,
+    ) < 1:
         raise ValueError("video dimensions and process_every_n_frames must be positive")
     if video.max_frame_age_s <= 0.0:
         raise ValueError("video.max_frame_age_s must be positive")
@@ -156,11 +171,14 @@ def _validate(
         "auto",
         "cpu",
         "cuda",
+        "tensorrt",
+        "trt",
         "directml",
         "dml",
     }:
         raise ValueError(
-            "detector.execution_provider must be auto, cpu, cuda, or directml"
+            "detector.execution_provider must be auto, cpu, cuda, tensorrt, "
+            "or directml"
         )
     if not 0.0 <= detector.confidence_threshold <= 1.0:
         raise ValueError("detector.confidence_threshold must be within [0, 1]")
@@ -193,6 +211,16 @@ def _validate(
         or performance.onnx_device_id < 0
     ):
         raise ValueError("performance.onnx_device_id must be a non-negative integer")
+    if (
+        isinstance(performance.onnx_warmup_runs, bool)
+        or not isinstance(performance.onnx_warmup_runs, int)
+        or performance.onnx_warmup_runs < 0
+    ):
+        raise ValueError("performance.onnx_warmup_runs must be a non-negative integer")
+    if not isinstance(performance.onnx_tensorrt_cache_path, str) or not (
+        performance.onnx_tensorrt_cache_path.strip()
+    ):
+        raise ValueError("performance.onnx_tensorrt_cache_path cannot be empty")
     if performance.onnx_execution_mode not in {"sequential", "parallel"}:
         raise ValueError(
             "performance.onnx_execution_mode must be sequential or parallel"

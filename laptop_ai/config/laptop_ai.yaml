@@ -7,12 +7,14 @@ video:
   frame_height: 480
   process_every_n_frames: 1
   max_frame_age_s: 0.5
+  # Keep the capture queue at one frame to minimize camera-to-inference age.
+  capture_buffer_size: 1
 
 detector:
   backend: "opencv"
   confidence_threshold: 0.5
   model_path: null
-  # auto prefers CUDA, then DirectML on Windows, and safely falls back to CPU.
+  # auto prefers TensorRT, CUDA, DirectML, then safely falls back to CPU.
   execution_provider: "auto"
   input_width: 640
   input_height: 640
@@ -45,13 +47,24 @@ debug:
   log_level: "INFO"
   summary_interval_s: 5.0
 
-# Laptop runtime tuning. Zero thread counts let OpenCV/ONNX Runtime choose.
+# Tuned for this Ryzen 5 7500F (12 logical CPUs) and RX 7600 laptop-AI host.
 performance:
-  opencv_num_threads: 0
+  opencv_num_threads: 12
   opencv_use_opencl: false
-  onnx_intra_op_threads: 0
+  opencv_use_optimized: true
+  onnx_intra_op_threads: 12
   onnx_inter_op_threads: 0
   onnx_execution_mode: "sequential"
   onnx_graph_optimization: "all"
   onnx_enable_cpu_mem_arena: true
   onnx_device_id: 0
+  # Compile/allocate before the first live frame and reuse GPU output memory.
+  onnx_warmup_runs: 3
+  onnx_use_io_binding: true
+  # NVIDIA CUDA/TensorRT settings are ignored by DirectML and CPU.
+  onnx_cuda_conv_use_max_workspace: true
+  onnx_cuda_prefer_nhwc: false
+  onnx_tensorrt_fp16: true
+  onnx_tensorrt_engine_cache: true
+  onnx_tensorrt_timing_cache: true
+  onnx_tensorrt_cache_path: ".runtime/onnx-tensorrt"

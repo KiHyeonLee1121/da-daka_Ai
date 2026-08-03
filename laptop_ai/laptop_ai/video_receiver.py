@@ -172,7 +172,10 @@ class VideoReceiver:
 
                     capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.frame_width)
                     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.frame_height)
-                    capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    capture.set(
+                        cv2.CAP_PROP_BUFFERSIZE,
+                        self.config.capture_buffer_size,
+                    )
                 except (AttributeError, ImportError):
                     pass
 

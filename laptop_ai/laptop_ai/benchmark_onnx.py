@@ -12,8 +12,13 @@ from typing import Any
 import numpy as np
 
 from laptop_ai.config import PerformanceConfig
-from laptop_ai.onnx_detector import select_onnx_providers
-from laptop_ai.performance import create_onnx_session_options
+from laptop_ai.onnx_detector import preprocess_onnx_frame, select_onnx_providers
+from laptop_ai.onnx_runner import OnnxInferenceRunner, onnx_tensor_dtype
+from laptop_ai.performance import (
+    configure_opencv,
+    create_onnx_provider_options,
+    create_onnx_session_options,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -23,13 +28,28 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True, help="Path to a fixed-shape ONNX model")
     parser.add_argument(
         "--provider",
-        choices=("auto", "cpu", "cuda", "directml"),
+        choices=("auto", "cpu", "cuda", "tensorrt", "directml"),
         default="auto",
     )
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--intra-op-threads", type=int, default=0)
+    parser.add_argument("--opencv-threads", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=15)
     parser.add_argument("--iterations", type=int, default=80)
+    parser.add_argument(
+        "--io-binding",
+        action="store_true",
+        help="Use device I/O binding and fixed output buffers when supported",
+    )
+    parser.add_argument(
+        "--include-preprocess",
+        action="store_true",
+        help="Include 640x480 BGR frame preprocessing in each measured iteration",
+    )
+    parser.add_argument(
+        "--input-image",
+        help="Use an image and include its preprocessing in measured latency",
+    )
     return parser.parse_args()
 
 
@@ -44,13 +64,13 @@ def _fixed_shape(input_meta: Any) -> tuple[int, ...]:
 
 
 def _input_dtype(input_meta: Any) -> Any:
-    dtypes = {
-        "tensor(float)": np.float32,
-        "tensor(float16)": np.float16,
-    }
+    if input_meta.type not in {"tensor(float)", "tensor(float16)"}:
+        raise ValueError(
+            f"benchmark supports float/float16 inputs, got {input_meta.type}"
+        )
     try:
-        return dtypes[input_meta.type]
-    except KeyError as exc:
+        return onnx_tensor_dtype(input_meta.type)
+    except ValueError as exc:
         raise ValueError(
             f"benchmark supports float/float16 inputs, got {input_meta.type}"
         ) from exc
@@ -63,8 +83,10 @@ def _percentile(values: list[float], fraction: float) -> float:
 
 def main() -> int:
     args = _parse_args()
-    if args.warmup < 0 or args.iterations < 1:
-        raise ValueError("warmup must be non-negative and iterations must be positive")
+    if args.warmup < 0 or args.iterations < 1 or args.opencv_threads < 0:
+        raise ValueError(
+            "warmup/OpenCV threads must be non-negative and iterations positive"
+        )
     model_path = Path(args.model).expanduser()
     if not model_path.is_file():
         raise FileNotFoundError(f"ONNX model file does not exist: {model_path}")
@@ -72,14 +94,24 @@ def main() -> int:
     import onnxruntime as ort
 
     performance = PerformanceConfig(
+        opencv_num_threads=args.opencv_threads,
         onnx_intra_op_threads=args.intra_op_threads,
         onnx_device_id=args.device_id,
+        onnx_use_io_binding=args.io_binding,
     )
+    configure_opencv(performance)
+    provider_options = create_onnx_provider_options(performance)
     providers, selected, fallback = select_onnx_providers(
         args.provider,
         ort.get_available_providers(),
         device_id=args.device_id,
+        provider_options=provider_options,
     )
+    if selected == "TensorrtExecutionProvider":
+        Path(performance.onnx_tensorrt_cache_path).expanduser().mkdir(
+            parents=True,
+            exist_ok=True,
+        )
     options = create_onnx_session_options(
         ort,
         performance,
@@ -94,17 +126,54 @@ def main() -> int:
     if len(inputs) != 1:
         raise ValueError(f"benchmark expects one model input, got {len(inputs)}")
     input_meta = inputs[0]
+    input_shape = _fixed_shape(input_meta)
+    dtype = _input_dtype(input_meta)
     tensor = np.random.default_rng(1121).random(
-        _fixed_shape(input_meta),
+        input_shape,
         dtype=np.float32,
-    ).astype(_input_dtype(input_meta), copy=False)
+    ).astype(dtype, copy=False)
+    runner = OnnxInferenceRunner(
+        ort,
+        session,
+        selected_provider=selected,
+        device_id=args.device_id,
+        use_io_binding=args.io_binding,
+    )
+
+    frame = None
+    if args.input_image:
+        import cv2
+
+        frame = cv2.imread(args.input_image)
+        if frame is None:
+            raise ValueError(f"cannot read benchmark input image: {args.input_image}")
+    elif args.include_preprocess:
+        frame = np.random.default_rng(1121).integers(
+            0,
+            256,
+            size=(480, 640, 3),
+            dtype=np.uint8,
+        )
+    includes_preprocess = frame is not None
+    if includes_preprocess and (len(input_shape) != 4 or input_shape[1] != 3):
+        raise ValueError("preprocessing benchmark requires NCHW input with 3 channels")
+
+    def get_tensor() -> np.ndarray:
+        if frame is None:
+            return tensor
+        return preprocess_onnx_frame(
+            frame,
+            input_width=input_shape[3],
+            input_height=input_shape[2],
+            dtype=dtype,
+        )
 
     for _ in range(args.warmup):
-        session.run(None, {input_meta.name: tensor})
+        runner.run(get_tensor())
     latencies_ms: list[float] = []
     for _ in range(args.iterations):
         started = time.perf_counter_ns()
-        session.run(None, {input_meta.name: tensor})
+        runner.run(get_tensor())
         latencies_ms.append((time.perf_counter_ns() - started) / 1e6)
 
     median_ms = statistics.median(latencies_ms)
@@ -115,6 +184,8 @@ def main() -> int:
         "selected_provider": selected,
         "active_providers": session.get_providers(),
         "cpu_fallback": fallback,
+        "io_binding_mode": runner.io_binding_mode,
+        "includes_preprocess": includes_preprocess,
         "device_id": args.device_id,
         "input_shape": list(tensor.shape),
         "iterations": args.iterations,

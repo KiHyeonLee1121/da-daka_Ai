@@ -1,5 +1,8 @@
 from laptop_ai.config import PerformanceConfig, load_config
-from laptop_ai.performance import create_onnx_session_options
+from laptop_ai.performance import (
+    create_onnx_provider_options,
+    create_onnx_session_options,
+)
 
 
 class FakeSessionOptions:
@@ -52,9 +55,35 @@ def test_directml_session_options_force_supported_execution_settings() -> None:
     assert not options.enable_mem_pattern
 
 
+def test_gpu_provider_options_enable_caches_and_safe_cuda_copy() -> None:
+    options = create_onnx_provider_options(
+        PerformanceConfig(
+            onnx_device_id=2,
+            onnx_cuda_prefer_nhwc=True,
+            onnx_tensorrt_cache_path=".runtime/test-cache",
+        )
+    )
+    assert options["CUDAExecutionProvider"] == {
+        "device_id": "2",
+        "do_copy_in_default_stream": "1",
+        "cudnn_conv_use_max_workspace": "1",
+        "prefer_nhwc": "1",
+    }
+    assert options["TensorrtExecutionProvider"]["trt_fp16_enable"] == "1"
+    assert options["TensorrtExecutionProvider"]["trt_engine_cache_enable"] == "1"
+    assert options["TensorrtExecutionProvider"]["trt_timing_cache_enable"] == "1"
+    assert options["TensorrtExecutionProvider"]["trt_engine_cache_path"].endswith(
+        "test-cache"
+    )
+
+
 def test_primary_config_is_headless_and_graph_optimized() -> None:
     config = load_config("config/laptop_ai.yaml")
     assert not config.debug.show_window
     assert config.detector.execution_provider == "auto"
     assert config.performance.onnx_graph_optimization == "all"
     assert config.performance.onnx_device_id == 0
+    assert config.performance.opencv_num_threads == 12
+    assert config.performance.onnx_intra_op_threads == 12
+    assert config.performance.onnx_warmup_runs == 3
+    assert config.performance.onnx_use_io_binding

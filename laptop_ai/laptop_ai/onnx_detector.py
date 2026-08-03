@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import time
+from typing import Mapping
 
 import numpy as np
 
@@ -12,7 +13,11 @@ from laptop_ai.config import DetectorConfig, PerformanceConfig
 from laptop_ai.detection_types import DetectionResult
 from laptop_ai.detector_base import BaseDetector
 from laptop_ai.onnx_postprocess import postprocess_xyxy_score_class
-from laptop_ai.performance import create_onnx_session_options
+from laptop_ai.onnx_runner import OnnxInferenceRunner
+from laptop_ai.performance import (
+    create_onnx_provider_options,
+    create_onnx_session_options,
+)
 from laptop_ai.video_receiver import FramePacket
 
 
@@ -24,6 +29,7 @@ def select_onnx_providers(
     available: list[str],
     *,
     device_id: int = 0,
+    provider_options: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[list[object], str, bool]:
     """Select a provider list and report whether CPU fallback was required."""
     if isinstance(device_id, bool) or not isinstance(device_id, int) or device_id < 0:
@@ -31,23 +37,36 @@ def select_onnx_providers(
     normalized = requested.strip().lower()
     if normalized == "dml":
         normalized = "directml"
-    supported = {"auto", "cpu", "cuda", "directml"}
+    if normalized == "trt":
+        normalized = "tensorrt"
+    supported = {"auto", "cpu", "cuda", "tensorrt", "directml"}
     if normalized not in supported:
         raise ValueError(
-            "detector.execution_provider must be auto, cpu, cuda, or directml"
+            "detector.execution_provider must be auto, cpu, cuda, tensorrt, "
+            "or directml"
         )
 
     available_set = set(available)
     selected = "CPUExecutionProvider"
     fallback = False
     if normalized == "auto":
-        if "CUDAExecutionProvider" in available_set:
+        if "TensorrtExecutionProvider" in available_set:
+            selected = "TensorrtExecutionProvider"
+        elif "CUDAExecutionProvider" in available_set:
             selected = "CUDAExecutionProvider"
         elif "DmlExecutionProvider" in available_set:
             selected = "DmlExecutionProvider"
     elif normalized == "cuda":
         if "CUDAExecutionProvider" in available_set:
             selected = "CUDAExecutionProvider"
+        else:
+            fallback = True
+    elif normalized == "tensorrt":
+        if "TensorrtExecutionProvider" in available_set:
+            selected = "TensorrtExecutionProvider"
+        elif "CUDAExecutionProvider" in available_set:
+            selected = "CUDAExecutionProvider"
+            fallback = True
         else:
             fallback = True
     elif normalized == "directml":
@@ -62,11 +81,43 @@ def select_onnx_providers(
         )
     if selected == "CPUExecutionProvider":
         return [selected], selected, fallback
-    provider_options = {"device_id": str(device_id)}
-    providers: list[object] = [(selected, provider_options)]
+    all_options = provider_options or {}
+
+    def options_for(provider: str) -> dict[str, str]:
+        options = dict(all_options.get(provider, {}))
+        options.setdefault("device_id", str(device_id))
+        return options
+
+    providers: list[object] = [(selected, options_for(selected))]
+    if (
+        selected == "TensorrtExecutionProvider"
+        and "CUDAExecutionProvider" in available_set
+    ):
+        providers.append(("CUDAExecutionProvider", options_for("CUDAExecutionProvider")))
     if "CPUExecutionProvider" in available_set:
         providers.append("CPUExecutionProvider")
     return providers, selected, fallback
+
+
+def preprocess_onnx_frame(
+    frame: np.ndarray,
+    *,
+    input_width: int,
+    input_height: int,
+    dtype: object = np.float32,
+) -> np.ndarray:
+    """Resize, BGR-to-RGB convert, normalize, and create contiguous NCHW."""
+    import cv2
+
+    tensor = cv2.dnn.blobFromImage(
+        frame,
+        scalefactor=1.0 / 255.0,
+        size=(input_width, input_height),
+        swapRB=True,
+        crop=False,
+        ddepth=cv2.CV_32F,
+    )
+    return tensor.astype(dtype, copy=False)
 
 
 class OnnxDetector(BaseDetector):
@@ -95,15 +146,30 @@ class OnnxDetector(BaseDetector):
 
         available = ort.get_available_providers()
         performance_config = performance or PerformanceConfig()
+        provider_options = create_onnx_provider_options(performance_config)
         providers, selected_provider, fallback = select_onnx_providers(
             config.execution_provider,
             available,
             device_id=performance_config.onnx_device_id,
+            provider_options=provider_options,
         )
         if fallback:
             logger.warning(
-                "requested ONNX provider %s unavailable; using CPUExecutionProvider",
+                "requested ONNX provider %s unavailable; using %s",
                 config.execution_provider,
+                selected_provider,
+            )
+
+        if (
+            selected_provider == "TensorrtExecutionProvider"
+            and (
+                performance_config.onnx_tensorrt_engine_cache
+                or performance_config.onnx_tensorrt_timing_cache
+            )
+        ):
+            Path(performance_config.onnx_tensorrt_cache_path).expanduser().mkdir(
+                parents=True,
+                exist_ok=True,
             )
 
         self.config = config
@@ -140,7 +206,28 @@ class OnnxDetector(BaseDetector):
         inputs = self._session.get_inputs()
         if len(inputs) != 1:
             raise ValueError(f"ONNX detector expects one input, model has {len(inputs)}")
-        self._input_name = inputs[0].name
+        self._runner = OnnxInferenceRunner(
+            ort,
+            self._session,
+            selected_provider=selected_provider,
+            device_id=performance_config.onnx_device_id,
+            use_io_binding=performance_config.onnx_use_io_binding,
+        )
+        if self._runner.input_dtype not in {np.float32, np.float16}:
+            raise ValueError(
+                "ONNX detector input must be tensor(float) or tensor(float16)"
+            )
+        logger.info(
+            "ONNX I/O binding mode=%s warmup_runs=%d",
+            self._runner.io_binding_mode,
+            performance_config.onnx_warmup_runs,
+        )
+        warmup_tensor = np.zeros(
+            (1, 3, config.input_height, config.input_width),
+            dtype=self._runner.input_dtype,
+        )
+        for _ in range(performance_config.onnx_warmup_runs):
+            self._runner.run(warmup_tensor)
 
     @property
     def execution_providers(self) -> tuple[str, ...]:
@@ -148,16 +235,14 @@ class OnnxDetector(BaseDetector):
         return tuple(self._session.get_providers())
 
     def detect(self, packet: FramePacket) -> DetectionResult:
-        import cv2
-
         started = time.perf_counter_ns()
-        resized = cv2.resize(
+        tensor = preprocess_onnx_frame(
             packet.frame,
-            (self.config.input_width, self.config.input_height),
+            input_width=self.config.input_width,
+            input_height=self.config.input_height,
+            dtype=self._runner.input_dtype,
         )
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        tensor = np.transpose(rgb.astype(np.float32) / 255.0, (2, 0, 1))[None, ...]
-        outputs = self._session.run(None, {self._input_name: tensor})
+        outputs = self._runner.run(tensor)
         if not outputs:
             raise ValueError("ONNX model returned no outputs")
         candidate = postprocess_xyxy_score_class(

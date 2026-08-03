@@ -41,7 +41,9 @@ python -m pip install -r requirements-directml.txt
 python -m laptop_ai.main --config config/laptop_ai.yaml
 ```
 
-NVIDIA CUDA 환경은 `requirements-cuda.txt`를 사용한다.
+NVIDIA CUDA/TensorRT 환경은 `requirements-cuda.txt`를 사용한다. TensorRT
+라이브러리까지 설치되어 provider가 노출되면 `auto`가 TensorRT를 먼저 쓰고,
+지원하지 않는 subgraph는 CUDA와 CPU 순으로 처리한다.
 
 종료는 `Ctrl+C`, 디버그 창에서는 `q`를 사용한다. 종료 시 영상 캡처,
 UDP socket과 선택적 영상 writer를 정리한다.
@@ -65,6 +67,21 @@ UDP socket과 선택적 영상 writer를 정리한다.
 카메라는 Pi의 stream producer 한 프로세스만 열어야 한다. 루트 `main.py`와
 별도 stream server가 같은 카메라를 동시에 열지 않도록 한다.
 
+HTTP MJPEG는 설정이 간단하지만 매 프레임 JPEG 압축/해제와 TCP buffering이
+추가된다. 실제 장비에서 지연이 중요하면 Pi에서 H.264 RTP/UDP를 송신하고
+노트북 OpenCV가 다음과 같은 GStreamer pipeline을 읽도록 구성한다. Windows의
+GStreamer 설치와 `avdec_h264` plugin 제공 여부는 장비에서 먼저 확인한다.
+
+```yaml
+video:
+  backend: gstreamer
+  source: "udpsrc port=5600 caps=application/x-rtp,media=video,encoding-name=H264,payload=96 ! rtpjitterbuffer latency=20 drop-on-latency=true ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1 sync=false"
+  capture_buffer_size: 1
+```
+
+RTP/UDP는 손실 시 화질 저하가 생길 수 있으므로 유선 LAN을 우선하고, 실제 Pi
+송신기·카메라가 연결된 상태에서 packet loss와 capture-to-send 지연을 측정한다.
+
 ## 검출 backend
 
 OpenCV MVP:
@@ -85,7 +102,7 @@ ONNX Runtime:
 detector:
   backend: onnx
   model_path: models/dirt_detector.onnx
-  execution_provider: auto  # auto, cpu, cuda, directml
+  execution_provider: auto  # auto, cpu, tensorrt, cuda, directml
   input_width: 640
   input_height: 640
   class_id: 0
@@ -94,8 +111,9 @@ detector:
 ```
 
 모델 파일은 저장소에 포함하지 않는다. 경로가 없으면 시작 단계에서 명확한
-오류를 출력한다. `auto`는 CUDA, DirectML, CPU 순서로 사용 가능한 provider를
-고르고, 명시적으로 요청한 GPU provider가 없을 때도 CPU로 안전하게 fallback한다.
+오류를 출력한다. `auto`는 TensorRT, CUDA, DirectML, CPU 순서로 사용 가능한
+provider를 고르고, 명시적으로 요청한 GPU provider가 없을 때도 안전하게
+fallback한다.
 시작 로그에서 실제 선택된 provider와 device ID를 확인할 수 있다. 현재 후처리는 출력 첫 tensor가
 `[x1, y1, x2, y2, score, class_id]` 행인 모델만 지원한다. 다른 모델은
 `laptop_ai/onnx_postprocess.py`를 수정해야 하며, 지원하지 않는 출력 구조를
@@ -107,14 +125,23 @@ detector:
 
 ```yaml
 performance:
-  opencv_num_threads: 0       # 0은 OpenCV 자동 선택
+  opencv_num_threads: 12      # 이 PC의 logical CPU 수; 다른 PC는 다시 측정
   opencv_use_opencl: false
-  onnx_intra_op_threads: 0    # 0은 ONNX Runtime 자동 선택
+  opencv_use_optimized: true
+  onnx_intra_op_threads: 12
   onnx_inter_op_threads: 0
   onnx_execution_mode: sequential
   onnx_graph_optimization: all
   onnx_enable_cpu_mem_arena: true
   onnx_device_id: 0          # 기본 디스플레이 GPU는 보통 0
+  onnx_warmup_runs: 3
+  onnx_use_io_binding: true
+  onnx_cuda_conv_use_max_workspace: true
+  onnx_cuda_prefer_nhwc: false
+  onnx_tensorrt_fp16: true
+  onnx_tensorrt_engine_cache: true
+  onnx_tensorrt_timing_cache: true
+  onnx_tensorrt_cache_path: .runtime/onnx-tensorrt
 ```
 
 CPU 노트북에서는 먼저 자동 thread, sequential execution, graph optimization
@@ -124,6 +151,10 @@ mode를 검토한다. CUDA를 사용할 때는 `onnxruntime-gpu`가 제공하는
 DirectML은 병렬 execution과 memory pattern을 지원하지 않으므로 코드가
 `ORT_SEQUENTIAL`과 `enable_mem_pattern=false`를 자동으로 강제한다. 멀티 GPU
 장비에서는 작업 관리자에서 adapter 순서를 확인한 뒤 `onnx_device_id`를 바꾼다.
+고정 출력 모델은 I/O binding으로 GPU 출력 메모리를 재사용한다. 동적 출력이거나
+해당 provider에서 binding을 지원하지 않으면 자동으로 동적 할당 또는
+`session.run` 경로로 내려간다. TensorRT engine/timing cache는 모델, ORT,
+TensorRT 또는 GPU가 바뀌면 지우고 다시 생성해야 한다.
 
 디버그 창과 영상 저장은 처리량을 낮출 수 있으므로 성능 측정 및 실제 운용
 시에는 둘 다 끄는 것을 권장한다. `process_every_n_frames`는 노트북이 실제로
@@ -133,7 +164,24 @@ DirectML은 병렬 execution과 memory pattern을 지원하지 않으므로 코�
 
 ```powershell
 python -m laptop_ai.benchmark_onnx --model models\dirt_detector.onnx --provider auto
+python -m laptop_ai.benchmark_onnx --model models\dirt_detector.onnx `
+  --provider auto --io-binding --input-image C:\path\to\frame.jpg
 ```
+
+AMD DirectML 또는 NVIDIA GPU에서 FP16을 검증하려면 도구 환경을 설치하고 별도
+모델을 만든다. 원본 파일을 덮어쓰지 않으며 I/O type은 기본적으로 FP32로
+유지한다.
+
+```powershell
+python -m pip install -r requirements-tools.txt
+python -m laptop_ai.convert_onnx_fp16 `
+  --input models\dirt_detector.onnx `
+  --output models\dirt_detector.fp16.onnx
+```
+
+변환 모델은 실제 오염 검증 세트에서 precision/recall, bbox 오차와 threshold
+경계 사례를 통과한 뒤 `detector.model_path`에 지정한다. 샘플 YOLO 이미지의
+수치 일치는 실제 오염 모델의 정확도를 대신하지 않는다.
 
 RX 7600 DirectML과 CPU, AI HAT+ 13 TOPS 비교 및 MJPEG 링크별 하한은
 [`../docs/laptop_gpu_benchmark.md`](../docs/laptop_gpu_benchmark.md)에 기록한다.
