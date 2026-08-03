@@ -46,8 +46,11 @@ Arm/Takeoff 또는 분사 명령을 생성하지 않는다. Pi의 기존 `missio
 
 노트북의 영상 수신 thread는 최신 프레임 한 장만 유지하며 backlog를 만들지
 않는다. ONNX Runtime은 graph optimization, CPU thread 수, sequential/parallel
-execution과 CPU memory arena를 설정할 수 있다. OpenCV도 thread 수와 OpenCL
-사용 여부를 설정할 수 있어 노트북 CPU/GPU 구성에 맞춰 조정한다.
+execution과 CPU memory arena를 설정할 수 있다. Windows에서는 CUDA 또는
+DirectML provider를 자동 선택하고 GPU가 없으면 CPU로 fallback한다. DirectML
+선택 시 런타임 제약에 맞춰 sequential execution과 memory pattern 비활성화를
+강제한다. OpenCV도 thread 수와 OpenCL 사용 여부를 설정할 수 있어 노트북
+CPU/GPU 구성에 맞춰 조정한다.
 
 현재 frame ID와 capture timestamp는 노트북이 프레임을 받은 시점 기준이다.
 실제 카메라 노출/캡처 시점과 다를 수 있다. 향후 Pi stream producer가

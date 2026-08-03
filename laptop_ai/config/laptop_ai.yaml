@@ -12,7 +12,8 @@ detector:
   backend: "opencv"
   confidence_threshold: 0.5
   model_path: null
-  execution_provider: "cpu"
+  # auto prefers CUDA, then DirectML on Windows, and safely falls back to CPU.
+  execution_provider: "auto"
   input_width: 640
   input_height: 640
   class_id: 0
@@ -53,3 +54,4 @@ performance:
   onnx_execution_mode: "sequential"
   onnx_graph_optimization: "all"
   onnx_enable_cpu_mem_arena: true
+  onnx_device_id: 0

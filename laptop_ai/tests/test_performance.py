@@ -42,7 +42,19 @@ def test_onnx_session_options_apply_laptop_tuning() -> None:
     assert not options.enable_cpu_mem_arena
 
 
+def test_directml_session_options_force_supported_execution_settings() -> None:
+    options = create_onnx_session_options(
+        FakeOrt,
+        PerformanceConfig(onnx_execution_mode="parallel"),
+        execution_provider="DmlExecutionProvider",
+    )
+    assert options.execution_mode == "sequential"
+    assert not options.enable_mem_pattern
+
+
 def test_primary_config_is_headless_and_graph_optimized() -> None:
     config = load_config("config/laptop_ai.yaml")
     assert not config.debug.show_window
+    assert config.detector.execution_provider == "auto"
     assert config.performance.onnx_graph_optimization == "all"
+    assert config.performance.onnx_device_id == 0

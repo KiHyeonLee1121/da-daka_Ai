@@ -1,4 +1,4 @@
-"""ONNX Runtime detector with configurable CPU or CUDA execution."""
+"""ONNX Runtime detector with automatic CPU, CUDA, or DirectML execution."""
 
 from __future__ import annotations
 
@@ -17,6 +17,56 @@ from laptop_ai.video_receiver import FramePacket
 
 
 logger = logging.getLogger(__name__)
+
+
+def select_onnx_providers(
+    requested: str,
+    available: list[str],
+    *,
+    device_id: int = 0,
+) -> tuple[list[object], str, bool]:
+    """Select a provider list and report whether CPU fallback was required."""
+    if isinstance(device_id, bool) or not isinstance(device_id, int) or device_id < 0:
+        raise ValueError("ONNX device_id must be a non-negative integer")
+    normalized = requested.strip().lower()
+    if normalized == "dml":
+        normalized = "directml"
+    supported = {"auto", "cpu", "cuda", "directml"}
+    if normalized not in supported:
+        raise ValueError(
+            "detector.execution_provider must be auto, cpu, cuda, or directml"
+        )
+
+    available_set = set(available)
+    selected = "CPUExecutionProvider"
+    fallback = False
+    if normalized == "auto":
+        if "CUDAExecutionProvider" in available_set:
+            selected = "CUDAExecutionProvider"
+        elif "DmlExecutionProvider" in available_set:
+            selected = "DmlExecutionProvider"
+    elif normalized == "cuda":
+        if "CUDAExecutionProvider" in available_set:
+            selected = "CUDAExecutionProvider"
+        else:
+            fallback = True
+    elif normalized == "directml":
+        if "DmlExecutionProvider" in available_set:
+            selected = "DmlExecutionProvider"
+        else:
+            fallback = True
+
+    if selected == "CPUExecutionProvider" and selected not in available_set:
+        raise RuntimeError(
+            "CPUExecutionProvider is unavailable and no requested GPU provider exists"
+        )
+    if selected == "CPUExecutionProvider":
+        return [selected], selected, fallback
+    provider_options = {"device_id": str(device_id)}
+    providers: list[object] = [(selected, provider_options)]
+    if "CPUExecutionProvider" in available_set:
+        providers.append("CPUExecutionProvider")
+    return providers, selected, fallback
 
 
 class OnnxDetector(BaseDetector):
@@ -38,46 +88,64 @@ class OnnxDetector(BaseDetector):
             import onnxruntime as ort
         except ImportError as exc:
             raise RuntimeError(
-                "onnxruntime is required for detector.backend=onnx; "
-                "install laptop_ai/requirements.txt"
+                "onnxruntime is required for detector.backend=onnx; install "
+                "requirements.txt, requirements-directml.txt, or "
+                "requirements-cuda.txt"
             ) from exc
 
         available = ort.get_available_providers()
-        requested = config.execution_provider.lower()
-        if requested == "cuda" and "CUDAExecutionProvider" in available:
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        elif requested == "cuda":
-            logger.warning("CUDAExecutionProvider unavailable; using CPUExecutionProvider")
-            providers = ["CPUExecutionProvider"]
-        elif requested == "cpu":
-            providers = ["CPUExecutionProvider"]
-        else:
-            raise ValueError("detector.execution_provider must be 'cpu' or 'cuda'")
+        performance_config = performance or PerformanceConfig()
+        providers, selected_provider, fallback = select_onnx_providers(
+            config.execution_provider,
+            available,
+            device_id=performance_config.onnx_device_id,
+        )
+        if fallback:
+            logger.warning(
+                "requested ONNX provider %s unavailable; using CPUExecutionProvider",
+                config.execution_provider,
+            )
 
         self.config = config
         self.model_path = model_path
         self.model_name = model_path.name
-        performance_config = performance or PerformanceConfig()
-        session_options = create_onnx_session_options(ort, performance_config)
+        session_options = create_onnx_session_options(
+            ort,
+            performance_config,
+            execution_provider=selected_provider,
+        )
         self._session = ort.InferenceSession(
             str(model_path),
             sess_options=session_options,
             providers=providers,
         )
         logger.info(
-            "ONNX runtime model=%s providers=%s intra_threads=%s "
-            "inter_threads=%s execution=%s graph_optimization=%s",
+            "ONNX runtime model=%s requested_provider=%s selected_provider=%s "
+            "providers=%s device_id=%d intra_threads=%s inter_threads=%s "
+            "execution=%s graph_optimization=%s",
             model_path,
+            config.execution_provider,
+            selected_provider,
             self._session.get_providers(),
+            performance_config.onnx_device_id,
             performance_config.onnx_intra_op_threads or "auto",
             performance_config.onnx_inter_op_threads or "auto",
-            performance_config.onnx_execution_mode,
+            (
+                "sequential"
+                if selected_provider == "DmlExecutionProvider"
+                else performance_config.onnx_execution_mode
+            ),
             performance_config.onnx_graph_optimization,
         )
         inputs = self._session.get_inputs()
         if len(inputs) != 1:
             raise ValueError(f"ONNX detector expects one input, model has {len(inputs)}")
         self._input_name = inputs[0].name
+
+    @property
+    def execution_providers(self) -> tuple[str, ...]:
+        """Return the active ONNX Runtime providers in priority order."""
+        return tuple(self._session.get_providers())
 
     def detect(self, packet: FramePacket) -> DetectionResult:
         import cv2

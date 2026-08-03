@@ -26,7 +26,7 @@ class DetectorConfig:
     backend: str = "opencv"
     confidence_threshold: float = 0.5
     model_path: str | None = None
-    execution_provider: str = "cpu"
+    execution_provider: str = "auto"
     input_width: int = 640
     input_height: int = 640
     class_id: int = 0
@@ -73,6 +73,7 @@ class PerformanceConfig:
     onnx_execution_mode: str = "sequential"
     onnx_graph_optimization: str = "all"
     onnx_enable_cpu_mem_arena: bool = True
+    onnx_device_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +147,21 @@ def _validate(
         raise ValueError("video.max_frame_age_s must be positive")
     if detector.backend not in {"opencv", "onnx"}:
         raise ValueError("detector.backend must be 'opencv' or 'onnx'")
+    provider = (
+        detector.execution_provider.strip().lower()
+        if isinstance(detector.execution_provider, str)
+        else ""
+    )
+    if provider not in {
+        "auto",
+        "cpu",
+        "cuda",
+        "directml",
+        "dml",
+    }:
+        raise ValueError(
+            "detector.execution_provider must be auto, cpu, cuda, or directml"
+        )
     if not 0.0 <= detector.confidence_threshold <= 1.0:
         raise ValueError("detector.confidence_threshold must be within [0, 1]")
     if min(detector.input_width, detector.input_height) < 1:
@@ -171,6 +187,12 @@ def _validate(
     )
     if any(value < 0 for value in thread_counts):
         raise ValueError("performance thread counts cannot be negative")
+    if (
+        isinstance(performance.onnx_device_id, bool)
+        or not isinstance(performance.onnx_device_id, int)
+        or performance.onnx_device_id < 0
+    ):
+        raise ValueError("performance.onnx_device_id must be a non-negative integer")
     if performance.onnx_execution_mode not in {"sequential", "parallel"}:
         raise ValueError(
             "performance.onnx_execution_mode must be sequential or parallel"

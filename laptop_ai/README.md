@@ -24,9 +24,24 @@ Windows PowerShell:
 cd laptop_ai
 py -m venv .venv
 .venv\Scripts\Activate.ps1
+# CPU runtime
 python -m pip install -r requirements.txt
 python -m laptop_ai.main --config config/laptop_ai.yaml
 ```
+
+Windows에서 AMD/Intel/NVIDIA DirectX 12 GPU를 DirectML로 사용할 때는 CPU용
+`onnxruntime` 대신 DirectML 배포판을 설치한다. 두 ONNX Runtime 배포판을
+같은 가상환경에 함께 설치하지 않는다.
+
+```powershell
+cd laptop_ai
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-directml.txt
+python -m laptop_ai.main --config config/laptop_ai.yaml
+```
+
+NVIDIA CUDA 환경은 `requirements-cuda.txt`를 사용한다.
 
 종료는 `Ctrl+C`, 디버그 창에서는 `q`를 사용한다. 종료 시 영상 캡처,
 UDP socket과 선택적 영상 writer를 정리한다.
@@ -70,7 +85,7 @@ ONNX Runtime:
 detector:
   backend: onnx
   model_path: models/dirt_detector.onnx
-  execution_provider: cpu  # 또는 cuda
+  execution_provider: auto  # auto, cpu, cuda, directml
   input_width: 640
   input_height: 640
   class_id: 0
@@ -79,8 +94,9 @@ detector:
 ```
 
 모델 파일은 저장소에 포함하지 않는다. 경로가 없으면 시작 단계에서 명확한
-오류를 출력한다. CUDA provider를 요청했지만 설치되지 않았으면 CPU provider로
-안전하게 fallback한다. 현재 후처리는 출력 첫 tensor가
+오류를 출력한다. `auto`는 CUDA, DirectML, CPU 순서로 사용 가능한 provider를
+고르고, 명시적으로 요청한 GPU provider가 없을 때도 CPU로 안전하게 fallback한다.
+시작 로그에서 실제 선택된 provider와 device ID를 확인할 수 있다. 현재 후처리는 출력 첫 tensor가
 `[x1, y1, x2, y2, score, class_id]` 행인 모델만 지원한다. 다른 모델은
 `laptop_ai/onnx_postprocess.py`를 수정해야 하며, 지원하지 않는 출력 구조를
 자동으로 처리한다고 가정하지 않는다.
@@ -98,16 +114,29 @@ performance:
   onnx_execution_mode: sequential
   onnx_graph_optimization: all
   onnx_enable_cpu_mem_arena: true
+  onnx_device_id: 0          # 기본 디스플레이 GPU는 보통 0
 ```
 
 CPU 노트북에서는 먼저 자동 thread, sequential execution, graph optimization
 `all`로 측정한다. 여러 모델/세션을 병렬 실행할 때만 inter-op 또는 parallel
 mode를 검토한다. CUDA를 사용할 때는 `onnxruntime-gpu`가 제공하는
 `CUDAExecutionProvider`가 실제로 표시되는지 시작 로그에서 확인한다.
+DirectML은 병렬 execution과 memory pattern을 지원하지 않으므로 코드가
+`ORT_SEQUENTIAL`과 `enable_mem_pattern=false`를 자동으로 강제한다. 멀티 GPU
+장비에서는 작업 관리자에서 adapter 순서를 확인한 뒤 `onnx_device_id`를 바꾼다.
 
 디버그 창과 영상 저장은 처리량을 낮출 수 있으므로 성능 측정 및 실제 운용
 시에는 둘 다 끄는 것을 권장한다. `process_every_n_frames`는 노트북이 실제로
 수신한 프레임 순서를 기준으로 적용된다.
+
+고정 입력 크기의 ONNX 모델은 provider별 순수 추론 시간을 재현할 수 있다.
+
+```powershell
+python -m laptop_ai.benchmark_onnx --model models\dirt_detector.onnx --provider auto
+```
+
+RX 7600 DirectML과 CPU, AI HAT+ 13 TOPS 비교 및 MJPEG 링크별 하한은
+[`../docs/laptop_gpu_benchmark.md`](../docs/laptop_gpu_benchmark.md)에 기록한다.
 
 ## UDP JSON
 

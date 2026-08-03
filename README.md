@@ -48,9 +48,15 @@ Pixhawk 4 / PX4
 
 Windows/Linux 노트북
   ├─ Pi 영상 stream 수신
-  ├─ OpenCV 또는 ONNX 오염 검출
+  ├─ OpenCV 또는 ONNX CPU/GPU 오염 검출
   └─ UDP JSON 검출 결과만 Pi로 송신
 ```
+
+Windows ONNX 경로는 `execution_provider: auto`에서 CUDA, DirectML, CPU 순으로
+사용 가능한 provider를 선택한다. AMD/Intel GPU는
+`laptop_ai/requirements-directml.txt`, NVIDIA CUDA는
+`laptop_ai/requirements-cuda.txt`를 사용하며, GPU provider가 없으면 CPU로
+fail-safe fallback한다.
 
 비행 순서와 PX4 모드 전환 권한은 ROS 2 `mission_manager` 하나로
 제한한다. 거리 오차에 따른 속도 setpoint는 활성화된

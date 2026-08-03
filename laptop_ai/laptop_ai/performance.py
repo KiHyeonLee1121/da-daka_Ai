@@ -25,18 +25,29 @@ def configure_opencv(config: PerformanceConfig) -> None:
     )
 
 
-def create_onnx_session_options(ort: Any, config: PerformanceConfig) -> Any:
-    """Create explicit ONNX Runtime options for predictable laptop inference."""
+def create_onnx_session_options(
+    ort: Any,
+    config: PerformanceConfig,
+    *,
+    execution_provider: str = "CPUExecutionProvider",
+) -> Any:
+    """Create safe ONNX Runtime options for the selected execution provider."""
     options = ort.SessionOptions()
     if config.onnx_intra_op_threads > 0:
         options.intra_op_num_threads = config.onnx_intra_op_threads
     if config.onnx_inter_op_threads > 0:
         options.inter_op_num_threads = config.onnx_inter_op_threads
-    options.execution_mode = (
-        ort.ExecutionMode.ORT_PARALLEL
-        if config.onnx_execution_mode == "parallel"
-        else ort.ExecutionMode.ORT_SEQUENTIAL
-    )
+    directml = execution_provider == "DmlExecutionProvider"
+    if directml:
+        # DirectML rejects parallel execution and memory-pattern optimization.
+        options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        options.enable_mem_pattern = False
+    else:
+        options.execution_mode = (
+            ort.ExecutionMode.ORT_PARALLEL
+            if config.onnx_execution_mode == "parallel"
+            else ort.ExecutionMode.ORT_SEQUENTIAL
+        )
     optimization_levels = {
         "disabled": ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
         "basic": ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
