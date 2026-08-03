@@ -1,3 +1,5 @@
+# Legacy Raspberry Pi single-process MVP configuration.
+# codex/laptop-ai-inference의 기본 AI 설정은 laptop_ai/config/laptop_ai.yaml이다.
 camera:
   source: 0
   width: 640

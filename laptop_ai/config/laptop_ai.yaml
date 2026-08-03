@@ -38,7 +38,18 @@ network:
   max_packet_bytes: 4096
 
 debug:
-  show_window: true
+  # Keep headless by default for the primary low-latency path.
+  show_window: false
   save_video: false
   log_level: "INFO"
   summary_interval_s: 5.0
+
+# Laptop runtime tuning. Zero thread counts let OpenCV/ONNX Runtime choose.
+performance:
+  opencv_num_threads: 0
+  opencv_use_opencl: false
+  onnx_intra_op_threads: 0
+  onnx_inter_op_threads: 0
+  onnx_execution_mode: "sequential"
+  onnx_graph_optimization: "all"
+  onnx_enable_cpu_mem_arena: true

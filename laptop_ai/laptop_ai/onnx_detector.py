@@ -8,10 +8,11 @@ import time
 
 import numpy as np
 
-from laptop_ai.config import DetectorConfig
+from laptop_ai.config import DetectorConfig, PerformanceConfig
 from laptop_ai.detection_types import DetectionResult
 from laptop_ai.detector_base import BaseDetector
 from laptop_ai.onnx_postprocess import postprocess_xyxy_score_class
+from laptop_ai.performance import create_onnx_session_options
 from laptop_ai.video_receiver import FramePacket
 
 
@@ -19,7 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 class OnnxDetector(BaseDetector):
-    def __init__(self, config: DetectorConfig) -> None:
+    def __init__(
+        self,
+        config: DetectorConfig,
+        performance: PerformanceConfig | None = None,
+    ) -> None:
         if not config.model_path:
             raise ValueError("detector.model_path is required for the ONNX backend")
         model_path = Path(config.model_path).expanduser()
@@ -52,7 +57,23 @@ class OnnxDetector(BaseDetector):
         self.config = config
         self.model_path = model_path
         self.model_name = model_path.name
-        self._session = ort.InferenceSession(str(model_path), providers=providers)
+        performance_config = performance or PerformanceConfig()
+        session_options = create_onnx_session_options(ort, performance_config)
+        self._session = ort.InferenceSession(
+            str(model_path),
+            sess_options=session_options,
+            providers=providers,
+        )
+        logger.info(
+            "ONNX runtime model=%s providers=%s intra_threads=%s "
+            "inter_threads=%s execution=%s graph_optimization=%s",
+            model_path,
+            self._session.get_providers(),
+            performance_config.onnx_intra_op_threads or "auto",
+            performance_config.onnx_inter_op_threads or "auto",
+            performance_config.onnx_execution_mode,
+            performance_config.onnx_graph_optimization,
+        )
         inputs = self._session.get_inputs()
         if len(inputs) != 1:
             raise ValueError(f"ONNX detector expects one input, model has {len(inputs)}")

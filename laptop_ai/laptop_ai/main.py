@@ -13,6 +13,7 @@ from laptop_ai.detector_base import BaseDetector
 from laptop_ai.health_monitor import HealthMonitor
 from laptop_ai.onnx_detector import OnnxDetector
 from laptop_ai.opencv_detector import OpenCvDetector
+from laptop_ai.performance import configure_opencv
 from laptop_ai.udp_result_sender import UdpResultSender
 from laptop_ai.video_receiver import VideoReceiver
 
@@ -32,11 +33,12 @@ def create_detector(config: AppConfig) -> BaseDetector:
     if config.detector.backend == "opencv":
         return OpenCvDetector(config.detector)
     if config.detector.backend == "onnx":
-        return OnnxDetector(config.detector)
+        return OnnxDetector(config.detector, config.performance)
     raise ValueError(f"unsupported detector backend: {config.detector.backend}")
 
 
 def run(config: AppConfig) -> int:
+    configure_opencv(config.performance)
     receiver = VideoReceiver(config.video)
     detector = create_detector(config)
     sender = UdpResultSender(
@@ -75,7 +77,11 @@ def run(config: AppConfig) -> int:
             if receiver.is_stale(packet):
                 logger.warning("discarding stale frame_id=%d", packet.frame_id)
                 continue
-            if (packet.frame_id - 1) % config.video.process_every_n_frames != 0:
+            if (
+                (health.metrics.received_frames - 1)
+                % config.video.process_every_n_frames
+                != 0
+            ):
                 continue
 
             result = detector.detect(packet)

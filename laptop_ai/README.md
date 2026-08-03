@@ -1,8 +1,10 @@
-# DA-DAKA Laptop AI
+# DA-DAKA Laptop AI — Primary Inference Path
 
 Windows 또는 Linux 노트북에서 Raspberry Pi 영상 스트림을 받아 오염 검출만
 수행하고, 작은 UDP JSON 결과를 Pi로 돌려보내는 일반 Python 프로그램이다.
 Pixhawk, MAVLink, MAVROS, Mission Manager 또는 분사 장치에 연결하지 않는다.
+`codex/laptop-ai-inference` 브랜치에서는 이 프로그램이 기본 AI 실행 경로이며
+AI HAT+/Hailo 코드는 사용하지 않는다.
 
 ## 설치와 실행
 
@@ -82,6 +84,30 @@ detector:
 `[x1, y1, x2, y2, score, class_id]` 행인 모델만 지원한다. 다른 모델은
 `laptop_ai/onnx_postprocess.py`를 수정해야 하며, 지원하지 않는 출력 구조를
 자동으로 처리한다고 가정하지 않는다.
+
+## 노트북 성능 설정
+
+`performance` 설정은 코드 수정 없이 노트북에 맞춰 추론 runtime을 조정한다.
+
+```yaml
+performance:
+  opencv_num_threads: 0       # 0은 OpenCV 자동 선택
+  opencv_use_opencl: false
+  onnx_intra_op_threads: 0    # 0은 ONNX Runtime 자동 선택
+  onnx_inter_op_threads: 0
+  onnx_execution_mode: sequential
+  onnx_graph_optimization: all
+  onnx_enable_cpu_mem_arena: true
+```
+
+CPU 노트북에서는 먼저 자동 thread, sequential execution, graph optimization
+`all`로 측정한다. 여러 모델/세션을 병렬 실행할 때만 inter-op 또는 parallel
+mode를 검토한다. CUDA를 사용할 때는 `onnxruntime-gpu`가 제공하는
+`CUDAExecutionProvider`가 실제로 표시되는지 시작 로그에서 확인한다.
+
+디버그 창과 영상 저장은 처리량을 낮출 수 있으므로 성능 측정 및 실제 운용
+시에는 둘 다 끄는 것을 권장한다. `process_every_n_frames`는 노트북이 실제로
+수신한 프레임 순서를 기준으로 적용된다.
 
 ## UDP JSON
 

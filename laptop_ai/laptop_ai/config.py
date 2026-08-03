@@ -56,10 +56,23 @@ class NetworkConfig:
 
 @dataclass(frozen=True, slots=True)
 class DebugConfig:
-    show_window: bool = True
+    show_window: bool = False
     save_video: bool = False
     log_level: str = "INFO"
     summary_interval_s: float = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceConfig:
+    """Laptop inference runtime tuning; zero thread counts keep runtime defaults."""
+
+    opencv_num_threads: int = 0
+    opencv_use_opencl: bool = False
+    onnx_intra_op_threads: int = 0
+    onnx_inter_op_threads: int = 0
+    onnx_execution_mode: str = "sequential"
+    onnx_graph_optimization: str = "all"
+    onnx_enable_cpu_mem_arena: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +81,7 @@ class AppConfig:
     detector: DetectorConfig
     network: NetworkConfig
     debug: DebugConfig
+    performance: PerformanceConfig
 
 
 def _mapping(value: Any, section: str) -> dict[str, Any]:
@@ -90,6 +104,7 @@ def load_config(path: str | Path) -> AppConfig:
     detector_raw = _mapping(raw.get("detector"), "detector")
     network_raw = _mapping(raw.get("network"), "network")
     debug_raw = _mapping(raw.get("debug"), "debug")
+    performance_raw = _mapping(raw.get("performance"), "performance")
     if "source" not in video_raw:
         raise ValueError("video.source is required")
     if "destination_host" not in network_raw:
@@ -99,8 +114,15 @@ def load_config(path: str | Path) -> AppConfig:
     detector = DetectorConfig(**detector_raw)
     network = NetworkConfig(**network_raw)
     debug = DebugConfig(**debug_raw)
-    _validate(video, detector, network, debug)
-    return AppConfig(video=video, detector=detector, network=network, debug=debug)
+    performance = PerformanceConfig(**performance_raw)
+    _validate(video, detector, network, debug, performance)
+    return AppConfig(
+        video=video,
+        detector=detector,
+        network=network,
+        debug=debug,
+        performance=performance,
+    )
 
 
 def _validate(
@@ -108,6 +130,7 @@ def _validate(
     detector: DetectorConfig,
     network: NetworkConfig,
     debug: DebugConfig,
+    performance: PerformanceConfig,
 ) -> None:
     if isinstance(video.source, bool) or not isinstance(video.source, (str, int)):
         raise ValueError("video.source must be a URL/path string or camera integer")
@@ -141,3 +164,24 @@ def _validate(
         raise ValueError("network heartbeat and packet size settings are invalid")
     if debug.summary_interval_s <= 0.0:
         raise ValueError("debug.summary_interval_s must be positive")
+    thread_counts = (
+        performance.opencv_num_threads,
+        performance.onnx_intra_op_threads,
+        performance.onnx_inter_op_threads,
+    )
+    if any(value < 0 for value in thread_counts):
+        raise ValueError("performance thread counts cannot be negative")
+    if performance.onnx_execution_mode not in {"sequential", "parallel"}:
+        raise ValueError(
+            "performance.onnx_execution_mode must be sequential or parallel"
+        )
+    if performance.onnx_graph_optimization not in {
+        "disabled",
+        "basic",
+        "extended",
+        "all",
+    }:
+        raise ValueError(
+            "performance.onnx_graph_optimization must be disabled, basic, "
+            "extended, or all"
+        )

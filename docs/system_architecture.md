@@ -3,9 +3,9 @@
 ## 목적
 
 Raspberry Pi 5를 기체 탑재 companion computer로 사용하여 센서 처리,
-AI 판단, 거리제어, 미션 순서와 분사제어를 기체 내부에서 실행한다.
-제어팀 PC는 QGroundControl을 통해 상태를 감시하고 Hold/Land 등 비상
-개입을 담당한다.
+노트북 AI 결과 검증, 거리제어, 미션 순서와 분사 안전판단을 기체 내부에서
+실행한다. 영상 AI 추론은 노트북이 담당한다. 제어팀 PC는 QGroundControl을
+통해 상태를 감시하고 Hold/Land 등 비상 개입을 담당한다.
 
 ## 권장 실행 구조
 
@@ -13,6 +13,10 @@ AI 판단, 거리제어, 미션 순서와 분사제어를 기체 내부에서 �
 제어팀 PC
   QGroundControl
     ↕ Wi-Fi UDP MAVLink
+
+AI 노트북
+  OpenCV / ONNX Runtime
+    ↕ 영상 stream + UDP JSON
 
 Raspberry Pi 5
   mavlink-router ─ local UDP ─ MAVROS

@@ -2,10 +2,10 @@
 
 ## 변경 이유와 책임 분리
 
-Raspberry Pi 5 AI HAT+ 연결 문제와 Windows 노트북의 ROS 2 DDS discovery
-복잡도를 분리하기 위해 영상 추론만 노트북으로 이동했다. 영상은 Pi에서
-노트북으로 전송하고 결과는 UDP JSON으로 Pi에 반환한다. ROS 2 DDS는 Pi
-내부에만 유지한다.
+`codex/laptop-ai-inference`의 기본 운용 방식은 노트북 AI 추론이다.
+Raspberry Pi 5 AI HAT+ 연결 문제를 임시 우회하는 보조 경로가 아니라,
+영상은 Pi에서 노트북으로 전송하고 결과만 UDP JSON으로 Pi에 반환하는 것을
+이 브랜치의 주 구조로 채택한다. ROS 2 DDS는 Pi 내부에만 유지한다.
 
 ```text
 하단 카메라
@@ -43,6 +43,11 @@ Arm/Takeoff 또는 분사 명령을 생성하지 않는다. Pi의 기존 `missio
    frame 순서, 값 범위와 선택적 sender age를 검사한다.
 8. 수신 시각 기준으로 fresh한 결과만 `/ai/detection_result`에 typed message로
    발행하고 `/ai/health`와 fail-closed 상태를 갱신한다.
+
+노트북의 영상 수신 thread는 최신 프레임 한 장만 유지하며 backlog를 만들지
+않는다. ONNX Runtime은 graph optimization, CPU thread 수, sequential/parallel
+execution과 CPU memory arena를 설정할 수 있다. OpenCV도 thread 수와 OpenCL
+사용 여부를 설정할 수 있어 노트북 CPU/GPU 구성에 맞춰 조정한다.
 
 현재 frame ID와 capture timestamp는 노트북이 프레임을 받은 시점 기준이다.
 실제 카메라 노출/캡처 시점과 다를 수 있다. 향후 Pi stream producer가

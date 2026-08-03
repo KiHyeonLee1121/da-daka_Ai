@@ -1,13 +1,34 @@
-# DAKA RPi MVP
+# DAKA Laptop AI + Raspberry Pi Control
 
-아크릴판을 태양광 패널처럼 꾸며 놓고, 드론이 카메라로 이물질을 찾은 뒤 가까운 거리에서 선택적으로 분사하는 흐름을 테스트하기 위한 Raspberry Pi 5용 MVP.
+아크릴판을 태양광 패널처럼 꾸며 놓고, 드론 카메라 영상을 노트북에서
+분석한 뒤 검출 결과만 Raspberry Pi로 돌려보내 선택적 분사 흐름을 검증하는
+MVP다.
 
-처음부터 실제 태양광 패널 현장에 바로 투입하는 프로그램은 아님. 현재 목표는 훨씬 현실적인 쪽. 낮은 고도에서 아크릴 모사 패널을 촬영하고, 화면 안의 이물질 위치를 찾고, LiDAR 거리 조건이 맞을 때만 분사 명령을 내리는 기본 임무 흐름을 먼저 검증.
+## 이 브랜치의 기본 운용 프로필
+
+`codex/laptop-ai-inference`에서는 AI HAT+ 추론이 아니라 다음 경로를 주
+운용 방식으로 채택한다.
+
+```text
+Pi 카메라 stream → 노트북 OpenCV/ONNX 추론 → UDP JSON → Pi 검증/ROS 변환
+```
+
+- AI 연산의 기본 실행 위치는 Windows/Linux 노트북이다.
+- Raspberry Pi는 영상 송신, 결과 검증, ROS 2, 거리·비행·분사 안전 판단을
+  담당한다.
+- AI HAT+/Hailo 경로와 루트 `main.py`는 기존 실험 호환용 코드이며 이
+  브랜치의 권장 live 경로가 아니다.
+- 노트북은 Pixhawk, MAVLink, 비행 mode 또는 분사 장치를 직접 제어하지 않는다.
+
+처음부터 실제 태양광 패널 현장에 바로 투입하는 프로그램은 아니다. 낮은
+고도에서 아크릴 모사 패널을 촬영하고, 화면 안의 이물질 위치를 찾고, LiDAR
+거리 조건이 맞을 때만 분사 명령을 내리는 기본 임무 흐름을 먼저 검증한다.
 
 ## 현재 시스템 구조
 
-실기체 제어 구조는 제어팀 PC에서 OFFBOARD 명령을 생성하는 방식에서,
-Raspberry Pi 5가 기체 탑재 제어 컴퓨터 역할을 하는 방식으로 개편 중이다.
+Raspberry Pi 5는 기체 탑재 제어 컴퓨터이고, 별도 노트북은 AI 추론 전용
+컴퓨터다. 제어팀 PC/QGroundControl과 AI 노트북은 같은 장비일 수 있지만
+프로세스의 책임은 분리한다.
 
 ```text
 제어팀 PC QGroundControl
@@ -91,7 +112,8 @@ Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
 ## 기존 Python MVP와 ROS 2 제어 패키지
 
 프로젝트에는 기존 Raspberry Pi 단일 Python MVP와 ROS 2 거리제어 패키지가
-함께 있다.
+함께 있다. 아래 루트 Python MVP 기능은 회귀 테스트와 과거 실험 호환을 위해
+유지하며, 이 브랜치의 기본 AI 실행 진입점은 `laptop_ai`다.
 
 - 하단 카메라 또는 영상 파일 입력
 - 아크릴 모사 패널 영역 처리
@@ -110,7 +132,9 @@ Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
 - QGC/RC/PX4 외부 모드 개입 우선 처리
 - 거리제어 미션 CSV 로그
 
-현재 검출기는 딥러닝 모델이 아니라 OpenCV 기반. Raspberry Pi 5 + AI HAT+ 13 TOPS를 나중에 붙일 수 있도록 `hailo_dirt_detector.py` 인터페이스는 준비해 두었지만, 실제 Hailo HEF 모델 추론은 아직 연결하지 않음.
+기존 루트 검출기는 딥러닝 모델이 아니라 OpenCV 기반이다.
+`hailo_dirt_detector.py`는 과거 AI HAT+ 확장 stub으로만 유지하며, 이
+브랜치의 기본 추론은 `laptop_ai`의 OpenCV 또는 ONNX backend를 사용한다.
 
 ## 테스트 대상
 
@@ -134,7 +158,8 @@ Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
 - 드론 기체
 - Pixhawk 기반 비행제어기
 - Raspberry Pi 5
-- Raspberry Pi 5 AI HAT+ 13 TOPS
+- AI 연산용 Windows/Linux 노트북
+- Raspberry Pi 5 AI HAT+ 13 TOPS는 이 브랜치의 기본 경로에서 사용하지 않음
 - 드론 하단 카메라
 - 드론 하단에 장착한 TF-Luna 싱글 포인트 LiDAR
 - 지상 펌프
@@ -410,9 +435,10 @@ detector:
 
 아크릴판 반사 때문에 생기는 흰색 하이라이트는 오염으로 오검출될 수 있음. 이를 줄이기 위해 `detector.reject_specular_highlights`, `detector.specular_v_threshold`, `detector.specular_saturation_max` 값을 두었음.
 
-## AI HAT+ 관련 상태
+## AI HAT+ 레거시 경로 상태
 
-현재 버전은 AI HAT+ 13 TOPS에서 실제 모델을 돌리는 상태는 아님.
+이 브랜치의 주 방식은 노트북 추론이며 AI HAT+ 13 TOPS에서 모델을 실행하지
+않는다. 아래 항목은 과거 Pi 단일 프로세스 실험의 확장 지점으로만 남아 있다.
 
 대신 다음을 준비해 두었음.
 
@@ -422,7 +448,8 @@ detector:
 - config 기반 backend 선택 구조
 - 추후 `model_path`를 통한 HEF 모델 연결 자리
 
-지금 코드는 Raspberry Pi 5에서 가볍게 돌아가는 MVP이고, Hailo 모델 추론은 다음 단계임.
+Hailo를 다시 채택하려면 별도의 브랜치와 실기체 검증을 거쳐야 하며, 현재
+노트북 경로의 자동 fallback으로 사용하지 않는다.
 
 Hailo를 실제로 쓰려면 별도로 해야 할 일이 있음.
 
