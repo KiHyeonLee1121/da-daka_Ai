@@ -14,7 +14,7 @@
   뒤 `/distance_control/enable`을 `false`로 전환한다.
 - AI 노드와 분사 노드는 직접 MAVLink 비행 명령을 발행하지 않는다.
 - 대시보드는 실제 명령 연동을 검증하기 전까지 읽기 전용으로 둔다.
-- QGC/RC/PX4가 OFFBOARD를 해제하면 Mission Manager는 해당 모드를
+- QGC/PX4가 OFFBOARD를 해제하면 Mission Manager는 해당 모드를
   우선하고 OFFBOARD로 재진입하지 않는다.
 - `altitude_guard`는 정상 명령권과 분리된 비상 안전 노드다. 이륙 직전
   local Z를 기준으로 상승량이 5 m에 도달하면 `AUTO.LAND`를 요청한다.
@@ -181,12 +181,12 @@ ros2 topic echo /altitude_guard/climb_m
 
 이 노드는 Raspberry Pi, MAVROS 또는 Pixhawk 연결 자체가 끊어진 경우
 착륙 명령을 전달할 수 없다. 따라서 PX4의 OFFBOARD-loss, 데이터링크-loss,
-RC-loss 및 geofence 설정을 대체하지 않는다.
+PX4 geofence 및 onboard failsafe 설정을 대체하지 않는다.
 
 ±0.08 m는 VM/SITL에서 마지막으로 검증된 값이다. 실제 TF-Luna 로그를
 확인한 뒤 좁히거나 넓혀야 하며, 검증 없이 당일 임의 변경하지 않는다.
 
-## QGC/RC 외부 개입
+## QGC와 PX4 failsafe 개입
 
 거리제어 또는 목표 유지 중 PX4 모드가 OFFBOARD에서 다른 모드로 바뀌면:
 
@@ -195,7 +195,7 @@ RC-loss 및 geofence 설정을 대체하지 않는다.
 3. 확인된 외부 모드를 다시 바꾸지 않는다.
 4. OFFBOARD로 재진입하지 않는다.
 5. 비-OFFBOARD 모드를 확인한 뒤 거리 setpoint를 중단한다.
-6. QGC/RC/PX4가 이후 복구와 착륙의 명령권을 가진다.
+6. QGC/PX4가 이후 복구와 착륙의 명령권을 가진다.
 
 내부 센서 오류가 발생했고 PX4가 여전히 OFFBOARD라면, 기존과 같이
 setpoint stream을 유지하면서 AUTO.LAND를 요청하고 실제 모드 전환을
@@ -222,6 +222,7 @@ tail -20 "$latest"
 - 실제 Pixhawk serial 장치와 baud는 Raspberry Pi에서 확인해야 한다.
 - 실제 TF-Luna parser는 9-byte 프레임, checksum, meter 변환을 수행한다.
   실제 표면별 신호 세기와 거리 안정성은 Raspberry Pi에서 확인해야 한다.
-- PX4 OFFBOARD-loss, RC-loss, 데이터링크-loss 설정은 별도 시험이 필요하다.
-- QGC만 Pi를 경유하면 Pi 전원 장애 시 QGC도 끊긴다. 독립 RC 또는
-  Pixhawk 직결 비상 링크가 필요하다.
+- PX4 OFFBOARD-loss와 데이터링크-loss 설정은 별도 시험이 필요하다.
+- RC 입력은 이 운용 구조에서 사용하지 않는다. QGC가 Pi를 경유하므로 Pi
+  전원 장애 시 QGC도 끊긴다는 한계가 있으며 PX4 onboard failsafe 설정이
+  반드시 필요하다.

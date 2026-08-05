@@ -98,10 +98,10 @@ ros2_ws/src/da_daka_control
 - 전체 거리제어 timeout: 20 s
 - 자동 CSV 로그: `~/da_daka_logs/distance_mission`
 
-QGC/RC/PX4가 OFFBOARD를 해제하면 외부 모드를 우선한다. Mission Manager는
+QGC/PX4가 OFFBOARD를 해제하면 외부 모드를 우선한다. Mission Manager는
 해당 개입을 latch하고 OFFBOARD로 재진입하지 않는다. PX4가 비-OFFBOARD
 모드를 확인한 뒤 거리 setpoint를 중단하며, 이후 복구와 착륙의 명령권은
-QGC/RC/PX4에 있다.
+QGC/PX4에 있다. RC 입력은 이 운용 구조에서 사용하지 않는다.
 
 ## ROS 2 인터페이스
 
@@ -134,10 +134,10 @@ Python FSM을 ROS Mission Manager에 직접 합치지 않는다.
 
 1. Pi 부팅만으로 Arm 또는 이륙하지 않는다.
 2. `/mission/start`는 운영자의 명시적 호출로만 실행한다.
-3. QGC/RC 모드 개입은 Mission Manager보다 우선한다.
+3. QGC와 PX4 failsafe 모드 개입은 Mission Manager보다 우선한다.
 4. Pi나 Wi-Fi가 끊겨도 PX4 OFFBOARD-loss failsafe가 동작하도록 설정한다.
-5. QGC가 Pi를 경유하므로 Pi 전원 장애에 대비한 독립 RC 또는 Pixhawk
-   직결 텔레메트리 링크를 둔다.
+5. QGC가 Pi를 경유하므로 Pi 전원 장애 시 QGC 연결도 끊긴다. 이 경우를
+   PX4 onboard failsafe가 독립적으로 처리하도록 설정한다.
 6. 센서 timeout, 유효 범위, 축 방향과 속도 제한을 프로펠러 제거 상태에서
    먼저 검증한다.
 7. 실제 분사는 정렬, 거리, 정지, 최대 횟수, emergency interlock을 모두
@@ -155,7 +155,8 @@ Python FSM을 ROS Mission Manager에 직접 합치지 않는다.
 - AI 검출 결과의 ROS 메시지 정의
 - 이동 명령과 분사 서비스 인터페이스 정의
 - 기존 Python FSM과 ROS Mission Manager 중 최종 단일 FSM 확정
-- PX4 OFFBOARD-loss, RC-loss, data-link-loss 설정 및 시험
+- PX4 OFFBOARD-loss와 data-link-loss 설정 및 시험
+- PX4에서 사용하지 않는 RC 모드 입력과 매핑이 비활성인지 확인
 - 프로펠러 제거 벤치 테스트 후 단계별 실기체 시험
 
 ## 저장소 브랜치 관계

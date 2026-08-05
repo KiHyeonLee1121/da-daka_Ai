@@ -304,8 +304,9 @@ class MissionManagerNode(Node):
         self._last_action_request_s: Dict[str, float] = {}
         self._action_attempts: Dict[str, int] = {}
         self._offboard_confirmed_once = False
-        self._operator_override_latched = False
-        self._operator_override_mode = ''
+        self._external_override_latched = False
+        self._external_override_mode = ''
+        self._offboard_entry_mode = ''
         self._abort_safe_complete_logged = False
         self._prestream_started_s: Optional[float] = None
         self._distance_control_started_s: Optional[float] = None
@@ -373,7 +374,6 @@ class MissionManagerNode(Node):
         self.declare_parameter('max_retries', 3)
         self.declare_parameter('loiter_mode', 'AUTO.LOITER')
         self.declare_parameter('land_mode', 'AUTO.LAND')
-        self.declare_parameter('respect_external_mode_override', True)
         self.declare_parameter('precheck_timeout', 5.0)
         self.declare_parameter('arming_timeout', 5.0)
         self.declare_parameter('takeoff_timeout', 5.0)
@@ -426,9 +426,6 @@ class MissionManagerNode(Node):
         self._max_retries = int(value('max_retries'))
         self._loiter_mode = str(value('loiter_mode'))
         self._land_mode = str(value('land_mode'))
-        self._respect_external_mode_override = bool(
-            value('respect_external_mode_override')
-        )
         self._enable_csv_logging = bool(value('enable_csv_logging'))
         self._log_directory = str(value('log_directory'))
         self._telemetry_log_rate_hz = float(
@@ -570,8 +567,7 @@ class MissionManagerNode(Node):
         self._armed = bool(message.armed)
         self._mode = str(message.mode)
         if (
-            self._respect_external_mode_override
-            and self._is_external_land_override(
+            self._is_external_land_override(
                 self._state,
                 previous_mode,
                 self._mode,
@@ -579,35 +575,34 @@ class MissionManagerNode(Node):
                 self._land_mode,
             )
         ):
-            self._operator_override_latched = True
-            self._operator_override_mode = self._mode
+            self._external_override_latched = True
+            self._external_override_mode = self._mode
             self._abort(
                 f'external AUTO.LAND confirmed: '
                 f'{previous_mode}->{self._mode}'
             )
             return
         if (
-            self._respect_external_mode_override
-            and self._is_external_mode_override(
+            self._is_external_mode_override(
                 self._state,
                 previous_mode,
                 self._mode,
                 self._offboard_confirmed_once,
             )
         ):
-            self._operator_override_latched = True
-            self._operator_override_mode = self._mode
+            self._external_override_latched = True
+            self._external_override_mode = self._mode
             self._abort(
                 f'external PX4 mode override confirmed: '
                 f'{previous_mode}->{self._mode}'
             )
             return
         if (
-            self._operator_override_latched
+            self._external_override_latched
             and self._state == MissionState.ABORT
             and self._mode != 'OFFBOARD'
         ):
-            self._operator_override_mode = self._mode
+            self._external_override_mode = self._mode
 
     def _pose_callback(self, message: PoseStamped) -> None:
         altitude = float(message.pose.position.z)
@@ -649,8 +644,9 @@ class MissionManagerNode(Node):
         self._last_action_request_s.clear()
         self._action_attempts.clear()
         self._offboard_confirmed_once = False
-        self._operator_override_latched = False
-        self._operator_override_mode = ''
+        self._external_override_latched = False
+        self._external_override_mode = ''
+        self._offboard_entry_mode = ''
         self._abort_safe_complete_logged = False
         self._prestream_started_s = None
         self._distance_control_started_s = None
@@ -697,6 +693,22 @@ class MissionManagerNode(Node):
             and current_mode == land_mode
         )
 
+    @staticmethod
+    def _handover_mode_is_expected(
+        state: MissionState,
+        current_mode: str,
+        loiter_mode: str,
+        offboard_entry_mode: str,
+    ) -> bool:
+        """Accept only modes commanded by this FSM during handover states."""
+        if state == MissionState.CHECK_SENSOR:
+            return current_mode in {'OFFBOARD', loiter_mode}
+        if state == MissionState.ENABLE_DISTANCE_CONTROL:
+            return current_mode == loiter_mode
+        if state == MissionState.ENTER_OFFBOARD:
+            return current_mode in {'OFFBOARD', offboard_entry_mode}
+        return True
+
     def _transition(self, next_state: MissionState) -> None:
         if next_state == self._state:
             return
@@ -711,6 +723,8 @@ class MissionManagerNode(Node):
             MissionState.ENABLE_DISTANCE_CONTROL,
         }:
             self._prestream_started_s = None
+        if next_state == MissionState.ENTER_OFFBOARD:
+            self._offboard_entry_mode = self._mode
         if next_state == MissionState.DISTANCE_CONTROL:
             if self._distance_control_started_s is None:
                 self._distance_control_started_s = time.monotonic()
@@ -902,8 +916,18 @@ class MissionManagerNode(Node):
             return
         # Leave OFFBOARD before changing the sole setpoint publisher's mode.
         # This avoids an OFFBOARD setpoint gap between two service calls.
-        if self._mode != self._loiter_mode:
+        if self._mode == 'OFFBOARD':
             self._request_mode(self._loiter_mode)
+            return
+        if not self._handover_mode_is_expected(
+            self._state,
+            self._mode,
+            self._loiter_mode,
+            self._offboard_entry_mode,
+        ):
+            self._abort_for_external_mode(
+                f'QGC/PX4 mode override during LOITER handover: {self._mode}'
+            )
             return
         self._transition(MissionState.ENABLE_DISTANCE_CONTROL)
 
@@ -925,7 +949,17 @@ class MissionManagerNode(Node):
 
     def _tick_enable(self, now_s: float) -> None:
         # The vertical controller rejects simultaneous modes. Disable Local Z
-        # first, then enable LiDAR control while OFFBOARD stays active.
+        # first, then enable LiDAR control while PX4 holds AUTO.LOITER.
+        if not self._handover_mode_is_expected(
+            self._state,
+            self._mode,
+            self._loiter_mode,
+            self._offboard_entry_mode,
+        ):
+            self._abort_for_external_mode(
+                f'QGC/PX4 mode override during controller handover: {self._mode}'
+            )
+            return
         if self._local_takeoff_enabled:
             self._request_local_takeoff_enable(
                 False,
@@ -960,13 +994,22 @@ class MissionManagerNode(Node):
                 self._transition(MissionState.WAIT_HOVER)
             return
         if (
-            self._respect_external_mode_override
-            and self._mode == self._land_mode
+            self._mode == self._land_mode
         ):
-            self._operator_override_latched = True
-            self._operator_override_mode = self._mode
+            self._external_override_latched = True
+            self._external_override_mode = self._mode
             self._abort(
                 'external AUTO.LAND confirmed before OFFBOARD entry'
+            )
+            return
+        if not self._handover_mode_is_expected(
+            self._state,
+            self._mode,
+            self._loiter_mode,
+            self._offboard_entry_mode,
+        ):
+            self._abort_for_external_mode(
+                f'QGC/PX4 mode override before OFFBOARD entry: {self._mode}'
             )
             return
         self._request_mode('OFFBOARD')
@@ -976,10 +1019,8 @@ class MissionManagerNode(Node):
             self._abort('distance controller unexpectedly disabled')
             return
         if self._mode != 'OFFBOARD':
-            self._operator_override_latched = (
-                self._respect_external_mode_override
-            )
-            self._operator_override_mode = self._mode
+            self._external_override_latched = True
+            self._external_override_mode = self._mode
             self._abort(
                 f'OFFBOARD lost; respecting actual mode={self._mode}'
             )
@@ -996,10 +1037,8 @@ class MissionManagerNode(Node):
 
     def _tick_target_hold(self, now_s: float) -> None:
         if self._mode != 'OFFBOARD':
-            self._operator_override_latched = (
-                self._respect_external_mode_override
-            )
-            self._operator_override_mode = self._mode
+            self._external_override_latched = True
+            self._external_override_mode = self._mode
             self._abort(
                 f'OFFBOARD lost during target hold; '
                 f'respecting actual mode={self._mode}'
@@ -1164,6 +1203,12 @@ class MissionManagerNode(Node):
         )
         self.get_logger().error(f'Mission abort: {reason}')
 
+    def _abort_for_external_mode(self, reason: str) -> None:
+        """Latch a confirmed QGC/PX4 mode and never request OFFBOARD again."""
+        self._external_override_latched = True
+        self._external_override_mode = self._mode
+        self._abort(reason)
+
     def _tick_abort(self, now_s: float) -> None:
         if not self._armed:
             if self._distance_enabled:
@@ -1185,11 +1230,10 @@ class MissionManagerNode(Node):
             return
 
         if (
-            self._respect_external_mode_override
-            and self._operator_override_latched
+            self._external_override_latched
             and self._mode != 'OFFBOARD'
         ):
-            # PX4 has already confirmed the QGC/RC/failsafe-selected mode.
+            # PX4 has confirmed the QGC/failsafe-selected mode. Never fight it.
             # Never fight that mode or re-enter OFFBOARD. Setpoints may stop
             # only after the non-OFFBOARD state has been observed here.
             if self._distance_enabled:
@@ -1206,12 +1250,12 @@ class MissionManagerNode(Node):
                 return
             if not self._abort_safe_complete_logged:
                 self._write_log_row(
-                    f'EXTERNAL_MODE_OVERRIDE:{self._operator_override_mode}'
+                    f'EXTERNAL_MODE_OVERRIDE:{self._external_override_mode}'
                 )
                 self._publish_result(
                     'ABORTED: external mode override retained; '
-                    f'mode={self._operator_override_mode}; '
-                    'operator/PX4 owns recovery'
+                    f'mode={self._external_override_mode}; '
+                    'QGC/PX4 owns recovery'
                 )
                 self._abort_safe_complete_logged = True
             return
@@ -1237,7 +1281,7 @@ class MissionManagerNode(Node):
         if now_s - self._state_entered_s > timeout_s:
             self.get_logger().error(
                 'ABORT timeout: AUTO.LAND remains active; '
-                'use QGC/RC emergency procedure'
+                'use QGC/PX4 emergency procedure'
             )
             self._state_entered_s = now_s
 
@@ -1269,8 +1313,8 @@ class MissionManagerNode(Node):
                 'vertical_speed_mps',
                 'distance_enabled',
                 'target_reached',
-                'operator_override_latched',
-                'operator_override_mode',
+                'external_override_latched',
+                'external_override_mode',
             ]
         )
         self._log_file.flush()
@@ -1315,8 +1359,8 @@ class MissionManagerNode(Node):
                 self._optional_number(self._vertical_speed_mps),
                 self._distance_enabled,
                 self._target_reached,
-                self._operator_override_latched,
-                self._operator_override_mode,
+                self._external_override_latched,
+                self._external_override_mode,
             ]
         )
         self._log_file.flush()

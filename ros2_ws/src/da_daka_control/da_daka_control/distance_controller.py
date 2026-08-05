@@ -69,9 +69,11 @@ class LocalTakeoffController:
         self.previous_output = 0.0
 
     def latch_launch_z(self, local_z_m: float) -> float:
-        """Latch a finite launch Z and return the relative climb target."""
+        """Latch launch Z once and return the unchanged target until reset."""
         if not math.isfinite(local_z_m):
             raise ValueError('local_z_m must be finite')
+        if self.target_z_m is not None:
+            return self.target_z_m
         self.launch_z_m = float(local_z_m)
         self.target_z_m = self.launch_z_m + self.climb_height_m
         self.previous_output = 0.0
@@ -606,6 +608,14 @@ class DistanceControllerNode(Node):
     ) -> SetBool.Response:
         requested = bool(request.data)
         now = time.monotonic()
+        if requested and self._mode == VerticalControlMode.LOCAL_TAKEOFF:
+            target_z_m = self._local_takeoff_controller.target_z_m
+            response.success = True
+            response.message = (
+                'already enabled; '
+                f'target local Z={target_z_m:.3f} m'
+            )
+            return response
         pose_fresh = (
             self._local_z_time is not None
             and now - self._local_z_time <= self._local_position_timeout_s
@@ -632,7 +642,6 @@ class DistanceControllerNode(Node):
             response.message = 'already disabled'
             return response
 
-        self._local_takeoff_controller.reset()
         self._local_takeoff_stability.reset()
         self._publish_local_takeoff_reached(False)
         self._last_control_time = now
@@ -644,6 +653,7 @@ class DistanceControllerNode(Node):
             self._mode = VerticalControlMode.LOCAL_TAKEOFF
             response.message = f'enabled; target local Z={target_z_m:.3f} m'
         else:
+            self._local_takeoff_controller.reset()
             self._mode = VerticalControlMode.DISABLED
             self._publish_command(0.0)
             response.message = 'disabled'

@@ -98,7 +98,7 @@ Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
   최대 3회 재시도
 - 목표거리 오차 ±0.08 m를 5초 유지했을 때 도달 성공 판정
 - OFFBOARD 전 setpoint 2초 prestream과 서비스 응답 이후 실제 상태 확인
-- QGC/RC/PX4가 OFFBOARD를 해제하거나 Land로 전환하면 자동 재진입하지
+- QGC/PX4가 OFFBOARD를 해제하거나 Land로 전환하면 자동 재진입하지
   않고 운전자 개입을 우선하는 override latch
 - 자동 CSV 미션 로그와 운전자 개입 모드 기록
 - Raspberry Pi용 `mavlink-router.conf.example`, launch 파일, YAML 설정,
@@ -138,7 +138,7 @@ Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
 - 디버그 화면 및 선택적 디버그 영상 저장
 - ROS 2 거리 필터와 수직 거리 PID 제어
 - MAVROS 기반 자동 Arm, 이륙, OFFBOARD, Loiter, Land Mission Manager
-- QGC/RC/PX4 외부 모드 개입 우선 처리
+- QGC/PX4 외부 모드 개입 우선 처리(RC 입력은 운용 구조에서 제외)
 - 거리제어 미션 CSV 로그
 
 현재 검출기는 딥러닝 모델이 아니라 OpenCV 기반. Raspberry Pi 5 + AI HAT+ 13 TOPS를 나중에 붙일 수 있도록 `hailo_dirt_detector.py` 인터페이스는 준비해 두었지만, 실제 Hailo HEF 모델 추론은 아직 연결하지 않음.

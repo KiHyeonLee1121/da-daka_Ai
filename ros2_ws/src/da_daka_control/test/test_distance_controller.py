@@ -63,6 +63,18 @@ def test_local_takeoff_uses_launch_reference_not_global_zero():
     assert math.isclose(speed, 0.5)
 
 
+def test_local_takeoff_duplicate_latch_keeps_original_target():
+    controller = make_takeoff_controller()
+    original_target = controller.latch_launch_z(10.0)
+
+    duplicate_target = controller.latch_launch_z(10.7)
+
+    assert math.isclose(original_target, 11.1)
+    assert math.isclose(duplicate_target, original_target)
+    assert math.isclose(controller.launch_z_m, 10.0)
+    assert math.isclose(controller.target_z_m, 11.1)
+
+
 def test_local_takeoff_respects_acceleration_and_speed_limits():
     controller = make_takeoff_controller()
     controller.latch_launch_z(4.0)

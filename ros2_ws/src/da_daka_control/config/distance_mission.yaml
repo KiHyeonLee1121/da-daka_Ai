@@ -15,7 +15,7 @@ mission_manager:
     require_on_ground_at_start: true
     require_enabled_sensors_healthy: true
     # Do not bypass PX4 health failures. The temporary 2026-08-03
-    # 0x14000 exception (XY position control + RC receiver) is retired.
+    # 0x14000 exception (XY position control + unused radio input) is retired.
     ignored_unhealthy_sensor_mask: 0
 
     # Non-blocking FSM and retry policy
@@ -24,8 +24,7 @@ mission_manager:
     max_retries: 3
     loiter_mode: AUTO.LOITER
     land_mode: AUTO.LAND
-    # If QGC/RC/PX4 leaves OFFBOARD, never fight the confirmed external mode.
-    respect_external_mode_override: true
+    # QGC and PX4 failsafe modes always win; radio control is not used.
 
     # Per-state timeouts
     precheck_timeout: 5.0

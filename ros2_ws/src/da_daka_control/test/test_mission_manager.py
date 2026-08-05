@@ -131,6 +131,52 @@ def test_manager_requested_land_is_not_external_override():
     )
 
 
+def test_qgc_px4_modes_are_restricted_during_controller_handover():
+    expected = MissionManagerNode._handover_mode_is_expected
+    assert expected(MissionState.CHECK_SENSOR, 'OFFBOARD', 'AUTO.LOITER', '')
+    assert expected(
+        MissionState.CHECK_SENSOR,
+        'AUTO.LOITER',
+        'AUTO.LOITER',
+        '',
+    )
+    assert not expected(MissionState.CHECK_SENSOR, 'POSCTL', 'AUTO.LOITER', '')
+    assert expected(
+        MissionState.ENABLE_DISTANCE_CONTROL,
+        'AUTO.LOITER',
+        'AUTO.LOITER',
+        '',
+    )
+    assert not expected(
+        MissionState.ENABLE_DISTANCE_CONTROL,
+        'POSCTL',
+        'AUTO.LOITER',
+        '',
+    )
+
+
+def test_qgc_px4_mode_change_blocks_offboard_reentry():
+    expected = MissionManagerNode._handover_mode_is_expected
+    assert expected(
+        MissionState.ENTER_OFFBOARD,
+        'AUTO.LOITER',
+        'AUTO.LOITER',
+        'AUTO.LOITER',
+    )
+    assert expected(
+        MissionState.ENTER_OFFBOARD,
+        'OFFBOARD',
+        'AUTO.LOITER',
+        'AUTO.LOITER',
+    )
+    assert not expected(
+        MissionState.ENTER_OFFBOARD,
+        'POSCTL',
+        'AUTO.LOITER',
+        'AUTO.LOITER',
+    )
+
+
 def healthy_status(**overrides):
     """Return status-failure arguments representing a flight-ready vehicle."""
     values = {
