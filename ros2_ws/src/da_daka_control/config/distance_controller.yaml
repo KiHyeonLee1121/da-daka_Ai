@@ -11,6 +11,24 @@ distance_controller:
     require_mavros_connected: true
     sensor_timeout_s: 0.3
 
+    # Launch-relative Local Z takeoff. This mode and LiDAR distance mode are
+    # mutually exclusive and share the one MAVROS vertical setpoint publisher.
+    local_position_topic: /mavros/local_position/pose
+    local_velocity_topic: /mavros/local_position/velocity_local
+    local_position_timeout_s: 0.3
+    local_takeoff_enable_service: /local_takeoff/enable
+    local_takeoff_enabled_state_topic: /local_takeoff/enabled
+    local_takeoff_target_reached_topic: /local_takeoff/target_reached
+    control_mode_topic: /vertical_control/mode
+    local_takeoff_climb_height_m: 1.1
+    local_takeoff_tolerance_m: 0.08
+    local_takeoff_kp: 0.8
+    local_takeoff_max_speed_mps: 0.4
+    local_takeoff_slow_zone_m: 0.4
+    local_takeoff_max_accel_mps2: 0.5
+    local_takeoff_stable_duration_s: 2.0
+    local_takeoff_stable_max_speed_mps: 0.08
+
     target_distance_m: 1.0
     deadband_m: 0.05
 

@@ -6,8 +6,9 @@
 
 ## 명령권 원칙
 
-- 비행 중 OFFBOARD setpoint 발행자는 이 패키지의 거리제어 노드 하나다.
-- 전체 비행 순서는 `mission_manager` 하나만 관리한다.
+- 비행 중 OFFBOARD 수직 setpoint 발행자는 `distance_controller` 하나다.
+- `mission_manager`는 거리제어 시험 순서만 관리한다. 다른 미션도 아래
+  enable 서비스를 호출해 Local Z 또는 LiDAR 제어를 선택적으로 사용한다.
 - 거리제어 노드는 PX4 모드를 변경하거나 스스로 비활성화하지 않는다.
   `target_reached`만 발행하고, Mission Manager가 AUTO.LOITER를 확인한
   뒤 `/distance_control/enable`을 `false`로 전환한다.
@@ -15,6 +16,8 @@
 - 대시보드는 실제 명령 연동을 검증하기 전까지 읽기 전용으로 둔다.
 - QGC/RC/PX4가 OFFBOARD를 해제하면 Mission Manager는 해당 모드를
   우선하고 OFFBOARD로 재진입하지 않는다.
+- `altitude_guard`는 정상 명령권과 분리된 비상 안전 노드다. 이륙 직전
+  local Z를 기준으로 상승량이 5 m에 도달하면 `AUTO.LAND`를 요청한다.
 
 ## ROS 인터페이스
 
@@ -31,10 +34,17 @@
 - `/mission/start` (`std_srvs/srv/Trigger`)
 - `/mission/abort` (`std_srvs/srv/Trigger`)
 - `/distance_control/enable` (`std_srvs/srv/SetBool`)
+- `/local_takeoff/enable` (`std_srvs/srv/SetBool`)
 - `/mission/state`
 - `/mission/result`
 - `/distance_control/enabled`
 - `/distance_control/target_reached`
+- `/local_takeoff/enabled`
+- `/local_takeoff/target_reached`
+- `/vertical_control/mode`
+- `/altitude_guard/triggered`
+- `/altitude_guard/reason`
+- `/altitude_guard/climb_m`
 
 ## 빌드
 
@@ -101,7 +111,10 @@ ros2 topic hz /distance/filtered
 
 ## 거리제어 기준
 
-- 이륙 목표: Home 기준 상대고도 1.1 m
+- 이륙 목표: Arm 후 latch한 Local Z 기준 +1.1 m
+- Local Z 최대 상승속도: 0.4 m/s
+- Local Z 최대 명령 가속도: 0.5 m/s²
+- Local Z 외부 P gain: 0.8
 - 거리 목표: 하향 TF-Luna 기준 1.0 m
 - 제어 최대속도: 0.25 m/s
 - 센서 timeout: 0.3 s
@@ -110,6 +123,65 @@ ros2 topic hz /distance/filtered
 - 시작 시 PX4 착륙 상태와 활성 센서 health 확인
 - 목표 판정: 오차 ±0.08 m, 수직속도 0.05 m/s 이하, 연속 5 s
 - 전체 거리제어 timeout: 20 s
+- 출발 지점 기준 비상 착륙 상승 한도: 5.0 m
+
+거리제어 시험 흐름은 다음과 같다.
+
+```text
+PRECHECK -> ARM -> Local Z zero prestream -> OFFBOARD
+-> Local Z +1.1 m hold -> AUTO.LOITER
+-> Local Z OFF -> LiDAR ON/prestream -> OFFBOARD distance control
+-> AUTO.LOITER -> LiDAR OFF -> AUTO.LAND
+```
+
+Local Z와 LiDAR 모드는 상호배제된다. 모드 교체는 OFFBOARD에서 직접
+setpoint를 끊지 않고, PX4가 `AUTO.LOITER`를 확인한 뒤 수행한다.
+
+## 다른 미션에서 제어 기능 재사용
+
+`mission_manager`를 실행하지 않아도 서비스 인터페이스는 재사용할 수 있다.
+단, 호출하는 미션은 MAVROS 수직속도 토픽의 명령권과 PX4 모드 전환 순서를
+직접 관리해야 한다.
+
+```bash
+# Local Z 이륙제어 시작/종료
+ros2 service call /local_takeoff/enable std_srvs/srv/SetBool "{data: true}"
+ros2 service call /local_takeoff/enable std_srvs/srv/SetBool "{data: false}"
+
+# LiDAR 거리제어 시작/종료
+ros2 service call /distance_control/enable std_srvs/srv/SetBool "{data: true}"
+ros2 service call /distance_control/enable std_srvs/srv/SetBool "{data: false}"
+
+# 현재 단일 수직제어 모드 확인
+ros2 topic echo /vertical_control/mode
+```
+
+활성화 조건은 최신 Local Z 또는 LiDAR 데이터, MAVROS 연결 및 Arm 상태다.
+Local Z 모드는 OFFBOARD 진입 전 `0 m/s` setpoint를 계속 발행하고,
+OFFBOARD가 확인된 뒤에만 상승속도를 계산한다. 데이터 timeout, Disarm 또는
+MAVROS 연결 해제 시 명령은 `0 m/s`로 제한된다. 다른 노드가 동시에
+`/mavros/setpoint_velocity/cmd_vel`을 발행하면 안 된다.
+
+## 독립 고도 안전 노드
+
+`distance_mission.launch.py`는 `altitude_guard`를 함께 실행한다. 이 노드는
+기체가 Disarm이고 PX4가 착륙 상태일 때 최신 local Z를 지상 기준으로
+저장하고, Arm 전환 시 그 값을 출발 지점으로 latch한다. 비행 중 상승량이
+`maximum_climb_m`에 도달하면 `/mavros/set_mode`로 `AUTO.LAND`를 요청하며,
+PX4가 실제 모드 전환을 확인할 때까지 요청을 재시도한다.
+
+고도 telemetry가 끊기거나 유효한 출발 기준 없이 Arm된 경우에도 기본적으로
+착륙을 요청한다. 상태는 다음 토픽으로 확인한다.
+
+```bash
+ros2 topic echo /altitude_guard/triggered
+ros2 topic echo /altitude_guard/reason
+ros2 topic echo /altitude_guard/climb_m
+```
+
+이 노드는 Raspberry Pi, MAVROS 또는 Pixhawk 연결 자체가 끊어진 경우
+착륙 명령을 전달할 수 없다. 따라서 PX4의 OFFBOARD-loss, 데이터링크-loss,
+RC-loss 및 geofence 설정을 대체하지 않는다.
 
 ±0.08 m는 VM/SITL에서 마지막으로 검증된 값이다. 실제 TF-Luna 로그를
 확인한 뒤 좁히거나 넓혀야 하며, 검증 없이 당일 임의 변경하지 않는다.

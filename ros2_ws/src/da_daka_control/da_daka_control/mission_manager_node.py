@@ -10,7 +10,7 @@ from typing import Callable, Dict, IO, Optional
 
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import Altitude, ExtendedState, State, SysStatus
-from mavros_msgs.srv import CommandBool, CommandTOL, SetMode
+from mavros_msgs.srv import CommandBool, SetMode
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -79,6 +79,7 @@ def status_failures(
     sensors_health: Optional[int],
     sys_status_time_s: Optional[float],
     require_enabled_sensors_healthy: bool,
+    ignored_unhealthy_sensor_mask: int,
 ) -> list[str]:
     """Return actionable PX4 status failures for mission gating."""
     failures = []
@@ -105,7 +106,11 @@ def status_failures(
         elif sensors_enabled is None or sensors_health is None:
             failures.append('PX4 sensor health is unavailable')
         else:
-            unhealthy_mask = sensors_enabled & ~sensors_health
+            unhealthy_mask = (
+                sensors_enabled
+                & ~sensors_health
+                & ~ignored_unhealthy_sensor_mask
+            )
             if unhealthy_mask:
                 failures.append(
                     f'PX4 enabled sensors unhealthy (mask=0x{unhealthy_mask:x})'
@@ -117,6 +122,7 @@ class MissionManagerNode(Node):
     """Run the distance-control mission without blocking ROS callbacks."""
 
     OFFBOARD_CONTROL_STATES = {
+        MissionState.WAIT_HOVER,
         MissionState.DISTANCE_CONTROL,
         MissionState.TARGET_HOLD,
     }
@@ -208,6 +214,18 @@ class MissionManagerNode(Node):
             latched_qos,
         )
         self.create_subscription(
+            Bool,
+            '/local_takeoff/enabled',
+            self._local_takeoff_enabled_callback,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/local_takeoff/target_reached',
+            self._local_takeoff_target_callback,
+            latched_qos,
+        )
+        self.create_subscription(
             Float32,
             '/distance_control/error',
             self._control_error_callback,
@@ -266,10 +284,6 @@ class MissionManagerNode(Node):
             CommandBool,
             '/mavros/cmd/arming',
         )
-        self._takeoff_client = self.create_client(
-            CommandTOL,
-            '/mavros/cmd/takeoff',
-        )
         self._mode_client = self.create_client(
             SetMode,
             '/mavros/set_mode',
@@ -278,6 +292,10 @@ class MissionManagerNode(Node):
             SetBool,
             '/distance_control/enable',
         )
+        self._local_takeoff_enable_client = self.create_client(
+            SetBool,
+            '/local_takeoff/enable',
+        )
 
         self._state = MissionState.IDLE
         self._state_entered_s = time.monotonic()
@@ -285,7 +303,6 @@ class MissionManagerNode(Node):
         self._pending_action: Optional[str] = None
         self._last_action_request_s: Dict[str, float] = {}
         self._action_attempts: Dict[str, int] = {}
-        self._takeoff_accepted = False
         self._offboard_confirmed_once = False
         self._operator_override_latched = False
         self._operator_override_mode = ''
@@ -306,6 +323,8 @@ class MissionManagerNode(Node):
         self._mode = ''
         self._distance_enabled = False
         self._target_reached = False
+        self._local_takeoff_enabled = False
+        self._local_takeoff_target_reached = False
         self._control_error_m: Optional[float] = None
         self._control_command_mps: Optional[float] = None
         self._distance_m: Optional[float] = None
@@ -338,9 +357,6 @@ class MissionManagerNode(Node):
         )
 
     def _declare_parameters(self) -> None:
-        self.declare_parameter('takeoff_altitude', 1.1)
-        self.declare_parameter('hover_altitude_tolerance', 0.1)
-        self.declare_parameter('hover_max_vertical_speed', 0.1)
         self.declare_parameter('hover_hold_duration', 2.0)
         self.declare_parameter('prestream_duration', 2.0)
         self.declare_parameter('sensor_timeout', 0.3)
@@ -349,6 +365,7 @@ class MissionManagerNode(Node):
         self.declare_parameter('minimum_battery_remaining', 0.30)
         self.declare_parameter('require_on_ground_at_start', True)
         self.declare_parameter('require_enabled_sensors_healthy', True)
+        self.declare_parameter('ignored_unhealthy_sensor_mask', 0)
         self.declare_parameter('distance_control_timeout', 20.0)
         self.declare_parameter('target_hold_confirm_duration', 0.2)
         self.declare_parameter('fsm_rate_hz', 20.0)
@@ -381,11 +398,6 @@ class MissionManagerNode(Node):
         def value(name: str):
             return self.get_parameter(name).value
 
-        self._takeoff_altitude_m = float(value('takeoff_altitude'))
-        self._hover_tolerance_m = float(
-            value('hover_altitude_tolerance')
-        )
-        self._hover_speed_mps = float(value('hover_max_vertical_speed'))
         self._hover_hold_s = float(value('hover_hold_duration'))
         self._prestream_s = float(value('prestream_duration'))
         self._sensor_timeout_s = float(value('sensor_timeout'))
@@ -399,6 +411,9 @@ class MissionManagerNode(Node):
         )
         self._require_enabled_sensors_healthy = bool(
             value('require_enabled_sensors_healthy')
+        )
+        self._ignored_unhealthy_sensor_mask = int(
+            value('ignored_unhealthy_sensor_mask')
         )
         self._control_timeout_s = float(
             value('distance_control_timeout')
@@ -450,8 +465,6 @@ class MissionManagerNode(Node):
             MissionState.ABORT: float(value('abort_timeout')),
         }
         positive_values = [
-            self._takeoff_altitude_m,
-            self._hover_tolerance_m,
             self._hover_hold_s,
             self._prestream_s,
             self._sensor_timeout_s,
@@ -464,12 +477,12 @@ class MissionManagerNode(Node):
         ]
         if any(item <= 0.0 for item in positive_values):
             raise ValueError('mission timing and distance values must be > 0')
-        if self._hover_speed_mps < 0.0:
-            raise ValueError('hover_max_vertical_speed cannot be negative')
         if not 0.0 <= self._minimum_battery_remaining <= 1.0:
             raise ValueError('minimum_battery_remaining must be within [0, 1]')
         if self._max_retries < 0:
             raise ValueError('max_retries cannot be negative')
+        if self._ignored_unhealthy_sensor_mask < 0:
+            raise ValueError('ignored_unhealthy_sensor_mask cannot be negative')
         if not self._log_directory:
             raise ValueError('log_directory cannot be empty')
 
@@ -489,6 +502,12 @@ class MissionManagerNode(Node):
             response.success = False
             response.message = (
                 'mission cannot start while distance control is enabled'
+            )
+            return response
+        if self._local_takeoff_enabled:
+            response.success = False
+            response.message = (
+                'mission cannot start while local takeoff control is enabled'
             )
             return response
         failures = self._preflight_failures(time.monotonic())
@@ -527,6 +546,12 @@ class MissionManagerNode(Node):
 
     def _target_callback(self, message: Bool) -> None:
         self._target_reached = bool(message.data)
+
+    def _local_takeoff_enabled_callback(self, message: Bool) -> None:
+        self._local_takeoff_enabled = bool(message.data)
+
+    def _local_takeoff_target_callback(self, message: Bool) -> None:
+        self._local_takeoff_target_reached = bool(message.data)
 
     def _control_error_callback(self, message: Float32) -> None:
         value = float(message.data)
@@ -623,7 +648,6 @@ class MissionManagerNode(Node):
         self._pending_action = None
         self._last_action_request_s.clear()
         self._action_attempts.clear()
-        self._takeoff_accepted = False
         self._offboard_confirmed_once = False
         self._operator_override_latched = False
         self._operator_override_mode = ''
@@ -682,7 +706,10 @@ class MissionManagerNode(Node):
         self._state_retry_count = 0
         self._pending_action = None
         self._action_attempts.clear()
-        if next_state == MissionState.PRESTREAM_SETPOINT:
+        if next_state in {
+            MissionState.PRESTREAM_SETPOINT,
+            MissionState.ENABLE_DISTANCE_CONTROL,
+        }:
             self._prestream_started_s = None
         if next_state == MissionState.DISTANCE_CONTROL:
             if self._distance_control_started_s is None:
@@ -734,8 +761,6 @@ class MissionManagerNode(Node):
             failures.append('MAVROS pose or velocity telemetry unavailable')
         if not self._sensor_healthy(now_s):
             failures.append('distance sensor unavailable or invalid')
-        if self._home_amsl_m is None:
-            failures.append('home AMSL altitude unavailable')
         failures.extend(
             status_failures(
                 now_s=now_s,
@@ -751,6 +776,9 @@ class MissionManagerNode(Node):
                 sys_status_time_s=self._sys_status_time_s,
                 require_enabled_sensors_healthy=(
                     self._require_enabled_sensors_healthy
+                ),
+                ignored_unhealthy_sensor_mask=(
+                    self._ignored_unhealthy_sensor_mask
                 ),
             )
         )
@@ -771,6 +799,9 @@ class MissionManagerNode(Node):
             sys_status_time_s=self._sys_status_time_s,
             require_enabled_sensors_healthy=(
                 self._require_enabled_sensors_healthy
+            ),
+            ignored_unhealthy_sensor_mask=(
+                self._ignored_unhealthy_sensor_mask
             ),
         )
 
@@ -847,81 +878,68 @@ class MissionManagerNode(Node):
         )
 
     def _tick_takeoff(self, _now_s: float) -> None:
-        if (
-            self._altitude_m is not None
-            and self._altitude_m >= self._takeoff_altitude_m - 0.2
-        ):
-            self._transition(MissionState.WAIT_HOVER)
+        """Latch launch Local Z and activate zero-setpoint prestream."""
+        if self._local_takeoff_enabled:
+            self._transition(MissionState.PRESTREAM_SETPOINT)
             return
-        if self._takeoff_accepted:
-            self._transition(MissionState.WAIT_HOVER)
-            return
-        request = CommandTOL.Request()
-        request.min_pitch = 0.0
-        request.yaw = math.nan
-        request.latitude = math.nan
-        request.longitude = math.nan
-        if self._home_amsl_m is None:
-            self._abort('home AMSL altitude unavailable for relative takeoff')
-            return
-        # MAV_CMD_NAV_TAKEOFF expects an absolute global altitude. Keep the
-        # ROS parameter relative to home by converting MAVROS AMSL-relative
-        # telemetry to the PX4 home AMSL altitude at request time.
-        request.altitude = self._home_amsl_m + self._takeoff_altitude_m
-        self._request_action(
-            'takeoff',
-            self._takeoff_client,
-            request,
-            self._takeoff_response_accepted,
-        )
-
-    def _takeoff_response_accepted(self, response) -> bool:
-        accepted = bool(response.success)
-        self._takeoff_accepted = accepted
-        return accepted
+        self._request_local_takeoff_enable(True, 'local_takeoff_enable')
 
     def _tick_wait_hover(self, now_s: float) -> None:
-        if (
-            self._relative_altitude_m is None
-            or self._vertical_speed_mps is None
-        ):
-            self._hover_window.reset()
+        if not self._local_takeoff_enabled:
+            self._abort('local takeoff controller unexpectedly disabled')
             return
-        stable = (
-            abs(self._relative_altitude_m - self._takeoff_altitude_m)
-            <= self._hover_tolerance_m
-            and abs(self._vertical_speed_mps) <= self._hover_speed_mps
-        )
-        if self._hover_window.update(stable, now_s):
+        if self._mode != 'OFFBOARD':
+            self._abort(f'OFFBOARD lost during Local Z takeoff: {self._mode}')
+            return
+        if self._hover_window.update(
+            self._local_takeoff_target_reached,
+            now_s,
+        ):
             self._transition(MissionState.CHECK_SENSOR)
 
     def _tick_check_sensor(self, now_s: float) -> None:
-        if self._sensor_healthy(now_s):
-            self._transition(MissionState.PRESTREAM_SETPOINT)
+        if not self._sensor_healthy(now_s):
+            return
+        # Leave OFFBOARD before changing the sole setpoint publisher's mode.
+        # This avoids an OFFBOARD setpoint gap between two service calls.
+        if self._mode != self._loiter_mode:
+            self._request_mode(self._loiter_mode)
+            return
+        self._transition(MissionState.ENABLE_DISTANCE_CONTROL)
 
     def _tick_prestream(self, now_s: float) -> None:
-        if not self._distance_enabled:
+        if not self._local_takeoff_enabled:
             self._prestream_started_s = None
-            request = SetBool.Request()
-            request.data = True
-            self._request_action(
-                'distance_enable',
-                self._distance_enable_client,
-                request,
-                lambda response: bool(response.success),
+            self._request_local_takeoff_enable(
+                True,
+                'local_takeoff_enable',
             )
             return
         if self._prestream_started_s is None:
             self._prestream_started_s = now_s
             self.get_logger().info(
-                'Distance controller confirmed enabled; prestream started'
+                'Local takeoff controller enabled; zero prestream started'
             )
         if now_s - self._prestream_started_s >= self._prestream_s:
-            self._transition(MissionState.ENABLE_DISTANCE_CONTROL)
-
-    def _tick_enable(self, _now_s: float) -> None:
-        if self._distance_enabled:
             self._transition(MissionState.ENTER_OFFBOARD)
+
+    def _tick_enable(self, now_s: float) -> None:
+        # The vertical controller rejects simultaneous modes. Disable Local Z
+        # first, then enable LiDAR control while OFFBOARD stays active.
+        if self._local_takeoff_enabled:
+            self._request_local_takeoff_enable(
+                False,
+                'local_takeoff_disable',
+            )
+            return
+        if self._distance_enabled:
+            if self._prestream_started_s is None:
+                self._prestream_started_s = now_s
+                self.get_logger().info(
+                    'LiDAR distance setpoint prestream started'
+                )
+            if now_s - self._prestream_started_s >= self._prestream_s:
+                self._transition(MissionState.ENTER_OFFBOARD)
             return
         request = SetBool.Request()
         request.data = True
@@ -935,8 +953,11 @@ class MissionManagerNode(Node):
     def _tick_offboard(self, _now_s: float) -> None:
         if self._mode == 'OFFBOARD':
             self._offboard_confirmed_once = True
-            self._distance_control_started_s = time.monotonic()
-            self._transition(MissionState.DISTANCE_CONTROL)
+            if self._distance_enabled:
+                self._distance_control_started_s = time.monotonic()
+                self._transition(MissionState.DISTANCE_CONTROL)
+            else:
+                self._transition(MissionState.WAIT_HOVER)
             return
         if (
             self._respect_external_mode_override
@@ -1033,6 +1054,20 @@ class MissionManagerNode(Node):
         self._request_action(
             action,
             self._distance_enable_client,
+            request,
+            lambda response: bool(response.success),
+        )
+
+    def _request_local_takeoff_enable(
+        self,
+        enabled: bool,
+        action: str,
+    ) -> None:
+        request = SetBool.Request()
+        request.data = enabled
+        self._request_action(
+            action,
+            self._local_takeoff_enable_client,
             request,
             lambda response: bool(response.success),
         )
@@ -1137,6 +1172,12 @@ class MissionManagerNode(Node):
                     'abort_distance_disable',
                 )
                 return
+            if self._local_takeoff_enabled:
+                self._request_local_takeoff_enable(
+                    False,
+                    'abort_local_takeoff_disable',
+                )
+                return
             if not self._abort_safe_complete_logged:
                 self._write_log_row('ABORT_SAFE_COMPLETE')
                 self._abort_safe_complete_logged = True
@@ -1155,6 +1196,12 @@ class MissionManagerNode(Node):
                 self._request_distance_enable(
                     False,
                     'override_distance_disable',
+                )
+                return
+            if self._local_takeoff_enabled:
+                self._request_local_takeoff_enable(
+                    False,
+                    'override_local_takeoff_disable',
                 )
                 return
             if not self._abort_safe_complete_logged:
@@ -1178,6 +1225,12 @@ class MissionManagerNode(Node):
             self._request_distance_enable(
                 False,
                 'abort_distance_disable',
+            )
+            return
+        if self._local_takeoff_enabled:
+            self._request_local_takeoff_enable(
+                False,
+                'abort_local_takeoff_disable',
             )
 
         timeout_s = self._timeouts[MissionState.ABORT]

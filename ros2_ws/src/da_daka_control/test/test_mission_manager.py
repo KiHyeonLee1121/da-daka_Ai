@@ -56,6 +56,27 @@ def test_takeoff_and_control_states_require_armed_vehicle():
         MissionState.DISTANCE_CONTROL
         in MissionManagerNode.ARMED_REQUIRED_STATES
     )
+
+
+def test_local_takeoff_and_mode_handover_are_offboard_guarded():
+    guarded = MissionManagerNode.OFFBOARD_CONTROL_STATES
+    assert MissionState.WAIT_HOVER in guarded
+    assert MissionState.DISTANCE_CONTROL in guarded
+
+
+def test_prestream_happens_before_offboard_guarding():
+    assert (
+        MissionState.PRESTREAM_SETPOINT
+        not in MissionManagerNode.OFFBOARD_CONTROL_STATES
+    )
+    assert (
+        MissionState.CHECK_SENSOR
+        not in MissionManagerNode.OFFBOARD_CONTROL_STATES
+    )
+    assert (
+        MissionState.ENABLE_DISTANCE_CONTROL
+        not in MissionManagerNode.OFFBOARD_CONTROL_STATES
+    )
     assert MissionState.AUTO_LAND not in MissionManagerNode.ARMED_REQUIRED_STATES
     assert (
         MissionState.WAIT_DISARM
@@ -125,6 +146,7 @@ def healthy_status(**overrides):
         'sensors_health': 0x3f,
         'sys_status_time_s': 9.5,
         'require_enabled_sensors_healthy': True,
+        'ignored_unhealthy_sensor_mask': 0,
     }
     values.update(overrides)
     return values
@@ -149,6 +171,26 @@ def test_stale_status_and_unhealthy_enabled_sensor_are_rejected():
         **healthy_status(sensors_health=0x1f)
     )
     assert any('mask=0x20' in failure for failure in unhealthy)
+
+
+def test_only_explicitly_ignored_unhealthy_bits_are_allowed():
+    ignored = status_failures(
+        **healthy_status(
+            sensors_enabled=0x14020,
+            sensors_health=0x20,
+            ignored_unhealthy_sensor_mask=0x14000,
+        )
+    )
+    assert ignored == []
+
+    remaining = status_failures(
+        **healthy_status(
+            sensors_enabled=0x14020,
+            sensors_health=0,
+            ignored_unhealthy_sensor_mask=0x14000,
+        )
+    )
+    assert any('mask=0x20' in failure for failure in remaining)
 
 
 def test_vehicle_must_be_on_ground_only_during_preflight():

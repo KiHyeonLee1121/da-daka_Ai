@@ -39,6 +39,7 @@ setup(
             'da_daka_control.virtual_distance_sensor:main',
             'tf_luna_serial = da_daka_control.tf_luna_serial:main',
             'mission_manager = da_daka_control.mission_manager_node:main',
+            'altitude_guard = da_daka_control.altitude_guard:main',
         ],
     },
 )

@@ -36,6 +36,48 @@ ROS 2 거리제어를 동시에 live 모드로 실행하면 안 된다. AI 코�
 상세한 통합 상태, 인터페이스와 남은 작업은
 [`docs/system_architecture.md`](docs/system_architecture.md)를 참고한다.
 
+## 2026-08-05 Local Z 이륙 및 거리제어 시험 구조
+
+GPS 원시 MSL 고도 변동이 자동이륙 목표에 들어가지 않도록 기존 AMSL 기반
+이륙 호출을 제거했다. 거리제어 시험은 Arm 시점의 PX4 Local Z를 출발
+기준으로 저장하고, 그 기준에서 `+1.1 m`까지 상승한다. 하향 LiDAR는 이륙
+목표 계산에 사용하지 않고, Local Z 이륙이 끝난 뒤 1 m 거리제어에만 쓴다.
+
+역할은 다음처럼 분리한다.
+
+- `distance_controller`: MAVROS 수직속도 setpoint의 단일 발행자. Local Z
+  이륙 모드와 LiDAR 거리제어 모드를 제공하며 두 모드는 상호배제한다.
+- `mission_manager`: 거리제어 시험 전용 상태머신. 시험을 실행할 때만 Arm,
+  모드 전환, 제어 ON/OFF, Loiter와 Land 순서를 관리한다.
+- 다른 미션: `/local_takeoff/enable`과 `/distance_control/enable` 서비스를
+  필요한 구간에서 호출해 같은 제어 기능을 재사용할 수 있다.
+- PX4: ROS가 전달한 수직속도 목표 아래에서 기존 속도·자세·rate PID와
+  모터 출력을 계속 담당한다. 이번 변경은 PX4 PID 파라미터를 수정하지 않는다.
+- `altitude_guard`: 정상 미션과 독립적으로 출발 Local Z 대비 5 m 상승 또는
+  Local Z telemetry 손실을 감시하고 `AUTO.LAND`를 요청한다.
+
+거리제어 시험의 현재 순서는 다음과 같다.
+
+```text
+PRECHECK -> ARM
+-> Local Z controller ON / zero setpoint prestream
+-> OFFBOARD -> launch Local Z +1.1 m stable hold
+-> AUTO.LOITER confirmed
+-> Local Z OFF -> LiDAR distance control ON / setpoint prestream
+-> OFFBOARD -> 1.0 m distance hold
+-> AUTO.LOITER -> LiDAR OFF -> AUTO.LAND -> Disarm
+```
+
+Local Z와 LiDAR 제어를 OFFBOARD 안에서 바로 교체하지 않는다. 두 서비스
+호출 사이 setpoint 공백으로 PX4 OFFBOARD가 해제되는 상황을 피하기 위해
+`AUTO.LOITER` 확인 후 교체하고, 새 setpoint를 프리스트림한 뒤 OFFBOARD에
+재진입한다. 실제 비행 전에 반드시 프로펠러 제거 벤치 시험과 QGC 모드 확인을
+먼저 수행해야 한다.
+
+세부 파라미터, ROS 인터페이스와 실행 절차는
+[`ros2_ws/src/da_daka_control/README.md`](ros2_ws/src/da_daka_control/README.md)에
+정리되어 있다.
+
 ## 2026-07-24 Raspberry Pi 제어구조 개편 작업
 
 제어 코드를 노트북 VM에서 실행하던 구조를 정리해, 최종적으로 Raspberry

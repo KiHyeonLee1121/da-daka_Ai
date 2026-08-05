@@ -1,9 +1,7 @@
 mission_manager:
   ros__parameters:
-    # Flight profile
-    takeoff_altitude: 1.1
-    hover_altitude_tolerance: 0.1
-    hover_max_vertical_speed: 0.1
+    # Distance-control test profile. Local Z climb height, tolerance and speed
+    # limits belong to distance_controller.yaml, not this test orchestrator.
     hover_hold_duration: 2.0
     prestream_duration: 2.0
     target_hold_confirm_duration: 0.2
@@ -16,6 +14,9 @@ mission_manager:
     minimum_battery_remaining: 0.30
     require_on_ground_at_start: true
     require_enabled_sensors_healthy: true
+    # Do not bypass PX4 health failures. The temporary 2026-08-03
+    # 0x14000 exception (XY position control + RC receiver) is retired.
+    ignored_unhealthy_sensor_mask: 0
 
     # Non-blocking FSM and retry policy
     fsm_rate_hz: 20.0
@@ -43,5 +44,7 @@ mission_manager:
 
     # One CSV per mission, including FSM events and 10 Hz telemetry.
     enable_csv_logging: true
-    log_directory: ~/da_daka_logs/distance_mission
+    # /workspace is bind-mounted to the host ROS workspace, so flight logs
+    # survive container recreation.
+    log_directory: /workspace/logs/distance_mission
     telemetry_log_rate_hz: 10.0

@@ -25,6 +25,11 @@ def generate_launch_description() -> LaunchDescription:
         'config',
         'distance_mission.yaml',
     )
+    altitude_guard_config = os.path.join(
+        package_share,
+        'config',
+        'altitude_guard.yaml',
+    )
 
     return LaunchDescription(
         [
@@ -48,6 +53,13 @@ def generate_launch_description() -> LaunchDescription:
                 name='mission_manager',
                 output='screen',
                 parameters=[mission_config],
+            ),
+            Node(
+                package='da_daka_control',
+                executable='altitude_guard',
+                name='altitude_guard',
+                output='screen',
+                parameters=[altitude_guard_config],
             ),
         ]
     )

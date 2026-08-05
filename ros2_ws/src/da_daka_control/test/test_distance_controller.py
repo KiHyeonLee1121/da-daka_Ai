@@ -4,6 +4,7 @@ import math
 
 from da_daka_control.distance_controller import (
     DistancePid,
+    LocalTakeoffController,
     TargetStabilityDetector,
 )
 
@@ -40,6 +41,72 @@ def test_deadband_commands_stop():
     controller.update(1.5, 0.05)
     speed, _ = controller.update(1.03, 0.05)
     assert speed == 0.0
+
+
+def make_takeoff_controller() -> LocalTakeoffController:
+    """Create a deterministic launch-relative Local Z controller."""
+    return LocalTakeoffController(
+        climb_height_m=1.1,
+        tolerance_m=0.05,
+        kp=0.8,
+        max_speed_mps=0.5,
+        slow_zone_m=0.4,
+        max_accel_mps2=1.0,
+    )
+
+
+def test_local_takeoff_uses_launch_reference_not_global_zero():
+    controller = make_takeoff_controller()
+    assert math.isclose(controller.latch_launch_z(-32.4), -31.3)
+    speed, error = controller.update(-32.4, 1.0)
+    assert error > 0.0
+    assert math.isclose(speed, 0.5)
+
+
+def test_local_takeoff_respects_acceleration_and_speed_limits():
+    controller = make_takeoff_controller()
+    controller.latch_launch_z(4.0)
+    first_speed, _ = controller.update(4.0, 0.1)
+    second_speed, _ = controller.update(4.0, 0.1)
+    assert math.isclose(first_speed, 0.1)
+    assert math.isclose(second_speed, 0.2)
+    for _ in range(10):
+        speed, _ = controller.update(4.0, 0.1)
+    assert math.isclose(speed, 0.5)
+
+
+def test_local_takeoff_stops_inside_target_tolerance():
+    controller = make_takeoff_controller()
+    target_z = controller.latch_launch_z(10.0)
+    controller.update(10.0, 1.0)
+    speed, error = controller.update(target_z - 0.02, 0.1)
+    assert abs(error) <= 0.05
+    assert speed == 0.0
+
+
+def test_local_takeoff_corrects_overshoot_downward():
+    controller = make_takeoff_controller()
+    target_z = controller.latch_launch_z(-5.0)
+    speed, error = controller.update(target_z + 0.2, 1.0)
+    assert error < 0.0
+    assert speed < 0.0
+
+
+def test_local_takeoff_rejects_missing_or_invalid_reference():
+    controller = make_takeoff_controller()
+    try:
+        controller.update(0.0, 0.1)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('update before launch latch must fail')
+
+    try:
+        controller.latch_launch_z(math.nan)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('non-finite launch Z must fail')
 
 
 def make_stability_detector() -> TargetStabilityDetector:
