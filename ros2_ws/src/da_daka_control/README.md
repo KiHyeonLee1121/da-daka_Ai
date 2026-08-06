@@ -48,8 +48,9 @@
 
 ## 빌드
 
-Raspberry Pi는 Debian 13 arm64 호스트와 Ubuntu 24.04 기반 컨테이너에서
-실행하는 ROS 2 Jazzy를 기준으로 한다.
+현재 Raspberry Pi 5의 Debian 13 arm64 호스트에서 Docker 컨테이너 방식으로
+운영한다. ROS 2 Jazzy와 제어 패키지는 Ubuntu 24.04 arm64 Docker 컨테이너에서
+실행한다.
 
 ```bash
 cd <da-daka_Ai 저장소 경로>/ros2_ws

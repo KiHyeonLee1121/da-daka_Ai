@@ -6,6 +6,10 @@
 
 ## 현재 시스템 구조
 
+현재 시스템은 **Raspberry Pi 5 호스트에서 Docker 컨테이너 방식으로 운영**한다.
+ROS 2 Jazzy와 관련 제어 노드는 Ubuntu 24.04 arm64 Docker 컨테이너에서
+실행한다.
+
 실기체 제어 구조는 제어팀 PC에서 OFFBOARD 명령을 생성하는 방식에서,
 Raspberry Pi 5가 기체 탑재 제어 컴퓨터 역할을 하는 방식으로 개편 중이다.
 
@@ -13,13 +17,14 @@ Raspberry Pi 5가 기체 탑재 제어 컴퓨터 역할을 하는 방식으로 �
 제어팀 PC QGroundControl
   └─ 상태 감시, 모드 확인, Hold/Land 비상 개입
                  ↕ Wi-Fi UDP MAVLink
-Raspberry Pi 5
-  ├─ mavlink-router
-  ├─ ROS 2 Jazzy / MAVROS
-  ├─ TF-Luna 거리 입력, 필터, 1 m 거리제어
-  ├─ 단일 Mission Manager
-  ├─ 카메라 및 오염 검출
-  └─ 분사제어
+Raspberry Pi 5 (Docker 호스트)
+  └─ Ubuntu 24.04 arm64 Docker 컨테이너
+      ├─ mavlink-router
+      ├─ ROS 2 Jazzy / MAVROS
+      ├─ TF-Luna 거리 입력, 필터, 1 m 거리제어
+      ├─ 단일 Mission Manager
+      ├─ 카메라 및 오염 검출
+      └─ 분사제어
                  ↕ Serial MAVLink
 Pixhawk 4 / PX4
   └─ 자세 안정화와 저수준 비행제어
@@ -287,8 +292,8 @@ daka_rpi/
 
 ## ROS 2 거리제어 패키지
 
-기준 환경은 Raspberry Pi 5의 Debian 13 arm64 호스트와 Ubuntu 24.04 기반
-컨테이너에서 실행하는 ROS 2 Jazzy이다.
+운영 환경은 Raspberry Pi 5의 Debian 13 arm64 호스트와 Ubuntu 24.04 arm64
+Docker 컨테이너에서 실행하는 ROS 2 Jazzy이다.
 
 ```bash
 cd ros2_ws
