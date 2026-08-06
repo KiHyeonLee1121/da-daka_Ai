@@ -231,10 +231,12 @@ class TargetStabilityDetector:
         speed_mps: float,
         now_s: float,
         flight_state_valid: bool = True,
+        telemetry_valid: bool = True,
     ) -> bool:
         """Return true after error and speed remain stable for the duration."""
         stable = (
             flight_state_valid
+            and telemetry_valid
             and abs(error_m) <= self.tolerance_m
             and abs(speed_mps) <= self.max_speed_mps
         )
@@ -274,6 +276,7 @@ class DistanceControllerNode(Node):
             '/mavros/local_position/velocity_local',
         )
         self.declare_parameter('local_position_timeout_s', 0.3)
+        self.declare_parameter('local_velocity_timeout_s', 0.3)
         self.declare_parameter(
             'local_takeoff_enable_service',
             '/local_takeoff/enable',
@@ -343,6 +346,9 @@ class DistanceControllerNode(Node):
         self._local_position_timeout_s = float(
             self.get_parameter('local_position_timeout_s').value
         )
+        self._local_velocity_timeout_s = float(
+            self.get_parameter('local_velocity_timeout_s').value
+        )
 
         if self._control_rate_hz <= 0.0:
             raise ValueError('control_rate_hz must be greater than zero')
@@ -350,6 +356,8 @@ class DistanceControllerNode(Node):
             raise ValueError('sensor_timeout_s must be greater than zero')
         if self._local_position_timeout_s <= 0.0:
             raise ValueError('local_position_timeout_s must be greater than zero')
+        if self._local_velocity_timeout_s <= 0.0:
+            raise ValueError('local_velocity_timeout_s must be greater than zero')
 
         self._pid = DistancePid(
             target_distance_m=float(self.get_parameter('target_distance_m').value),
@@ -734,6 +742,11 @@ class DistanceControllerNode(Node):
         speed, error = self._pid.update(self._latest_distance_m, dt)
         self._publish_command(speed)
         self._error_publisher.publish(Float32(data=error))
+        velocity_fresh = (
+            self._local_velocity_time is not None
+            and now - self._local_velocity_time <= self._local_velocity_timeout_s
+            and self._local_vertical_speed_mps is not None
+        )
         flight_state_valid = (
             not self._require_mavros
             or (
@@ -744,9 +757,12 @@ class DistanceControllerNode(Node):
         )
         reached = self._stability_detector.update(
             error_m=error,
-            speed_mps=speed,
+            speed_mps=(
+                self._local_vertical_speed_mps if velocity_fresh else 0.0
+            ),
             now_s=now,
             flight_state_valid=flight_state_valid,
+            telemetry_valid=velocity_fresh,
         )
         self._publish_target_reached(reached)
 
@@ -758,7 +774,7 @@ class DistanceControllerNode(Node):
         )
         velocity_stale = (
             self._local_velocity_time is None
-            or now - self._local_velocity_time > self._local_position_timeout_s
+            or now - self._local_velocity_time > self._local_velocity_timeout_s
             or self._local_vertical_speed_mps is None
         )
         mavros_unavailable = self._require_mavros and (

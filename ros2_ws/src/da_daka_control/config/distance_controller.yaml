@@ -16,6 +16,7 @@ distance_controller:
     local_position_topic: /mavros/local_position/pose
     local_velocity_topic: /mavros/local_position/velocity_local
     local_position_timeout_s: 0.3
+    local_velocity_timeout_s: 0.3
     local_takeoff_enable_service: /local_takeoff/enable
     local_takeoff_enabled_state_topic: /local_takeoff/enabled
     local_takeoff_target_reached_topic: /local_takeoff/target_reached

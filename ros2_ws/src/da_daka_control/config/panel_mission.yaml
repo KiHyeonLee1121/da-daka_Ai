@@ -1,0 +1,31 @@
+panel_mission:
+  ros__parameters:
+    # This must remain false until the real panel coordinates and test area
+    # have been measured and approved. The start service rejects false.
+    configuration_approved: false
+
+    # ENU offsets in meters from the Local XYZ launch reference.
+    # Candidate 3 m square route. Keep configuration_approved=false until
+    # the operator confirms orientation, clearance, and the complete order.
+    waypoint_x_m: [0.0, 0.0, -3.0, -3.0]
+    waypoint_y_m: [0.0, -3.0, -3.0, 0.0]
+
+    takeoff_height_m: 1.1
+    arrival_tolerance_m: 0.25
+    arrival_max_speed_mps: 0.10
+    arrival_stable_s: 2.0
+    maximum_horizontal_setpoint_speed_mps: 0.30
+    maximum_vertical_setpoint_speed_mps: 0.20
+    panel_hold_s: 3.0
+    prestream_s: 2.0
+    telemetry_timeout_s: 0.5
+
+    minimum_battery_remaining: 0.30
+    require_enabled_sensors_healthy: true
+    ignored_unhealthy_sensor_mask: 0
+
+    loiter_mode: AUTO.LOITER
+    land_mode: AUTO.LAND
+    tick_rate_hz: 20.0
+    action_retry_s: 1.0
+    state_timeout_s: 30.0

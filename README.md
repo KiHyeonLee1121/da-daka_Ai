@@ -83,6 +83,27 @@ Local Z와 LiDAR 제어를 OFFBOARD 안에서 바로 교체하지 않는다. 두
 [`ros2_ws/src/da_daka_control/README.md`](ros2_ws/src/da_daka_control/README.md)에
 정리되어 있다.
 
+## 독립 패널 이동 시험 미션
+
+거리제어 시험과 별도로 시작부터 착륙까지 수행하는 `panel_mission` 노드를
+추가했다. 출발 Local XYZ를 기준으로 Local Z 이륙한 뒤, 승인된 상대 ENU
+좌표를 순회하고 마지막 패널 정지 후 `AUTO.LOITER`, `AUTO.LAND`, Disarm
+확인 순서로 종료한다.
+
+- 시작·중단 서비스: `/panel_mission/start`, `/panel_mission/abort`
+- 상태·결과 토픽: `/panel_mission/state`, `/panel_mission/result`
+- 기본 경로 후보: 3 m 시계방향 정사각형
+  `(0,0) → (0,-3) → (-3,-3) → (-3,0)`
+- 수평 position setpoint 진행속도: 최대 `0.30 m/s`
+- 좌표 승인 기본값: `configuration_approved=false`
+- 거리제어와 패널 이동 setpoint 소유권 충돌 시 시작 거부 또는 중단
+- QGC/PX4의 LOITER·LAND·OFFBOARD 이탈을 우선하고 자동 재진입하지 않음
+- 기존 `altitude_guard`를 재사용하며 패널 시험 launch의 상승 한도는 `2.5 m`
+
+실제 좌표·방향·시험구역을 확인하고 PX4 health 오류가 모두 해소되기 전에는
+`configuration_approved`를 `true`로 바꾸지 않는다. 패널 시험 launch는
+자동으로 비행하지 않으며 명시적인 start 서비스가 필요하다.
+
 ## 2026-07-24 Raspberry Pi 제어구조 개편 작업
 
 제어 코드를 노트북 VM에서 실행하던 구조를 정리해, 최종적으로 Raspberry

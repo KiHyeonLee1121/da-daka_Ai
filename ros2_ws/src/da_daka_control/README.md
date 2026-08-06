@@ -73,6 +73,29 @@ colcon test-result --verbose
 6. 기체는 Disarm 상태여야 한다.
 7. 처음에는 프로펠러를 제거하고 인터페이스만 검증한다.
 
+## 독립 패널 이동 미션
+
+`panel_mission`은 거리제어 시험과 별개의 완전한 비행 FSM이다. 명시적인
+`/panel_mission/start` 요청 후 PRECHECK, Arm, Local Z 이륙, 상대 ENU 패널
+순회, LOITER, LAND와 Disarm 확인까지 수행한다.
+
+```bash
+ros2 launch da_daka_control panel_mission.launch.py
+ros2 service call /panel_mission/start std_srvs/srv/Trigger "{}"
+ros2 service call /panel_mission/abort std_srvs/srv/Trigger "{}"
+```
+
+launch에는 Local Z 이륙용 `distance_controller`, `panel_mission`, 기존
+`altitude_guard`가 포함된다. 노드는 기본 `IDLE`이며
+`config/panel_mission.yaml`의 `configuration_approved=false`일 때 start를
+거부한다. 거리제어 Mission Manager 또는 다른 position/velocity setpoint
+발행자와 동시에 실행하지 않는다.
+
+현재 후보 경로는 출발점 기준 3 m 시계방향 정사각형이며, position setpoint는
+수평 최대 `0.30 m/s`, 수직 최대 `0.20 m/s`로 점진 이동한다. 이는 PX4 실제
+속도의 절대 상한이 아니므로 실제 velocity telemetry와 PX4 제한 파라미터를
+함께 확인해야 한다.
+
 TF-Luna 드라이버는 별도 launch로 실행하며, 이 노드만 TF-Luna Serial
 장치를 점유해야 한다.
 

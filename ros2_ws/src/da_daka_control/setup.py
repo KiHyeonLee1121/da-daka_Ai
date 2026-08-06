@@ -40,6 +40,7 @@ setup(
             'tf_luna_serial = da_daka_control.tf_luna_serial:main',
             'mission_manager = da_daka_control.mission_manager_node:main',
             'altitude_guard = da_daka_control.altitude_guard:main',
+            'panel_mission = da_daka_control.panel_mission_node:main',
         ],
     },
 )

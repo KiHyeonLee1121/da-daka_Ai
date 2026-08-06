@@ -151,3 +151,24 @@ def test_target_rejects_motion_and_invalid_flight_state():
     assert not detector.update(0.01, 0.0, 14.0, flight_state_valid=False)
     assert not detector.update(0.01, 0.0, 18.0)
     assert detector.update(0.01, 0.0, 23.0)
+
+
+def test_target_rejects_actual_vertical_motion_inside_distance_tolerance():
+    detector = make_stability_detector()
+    assert not detector.update(0.01, 0.06, 10.0, telemetry_valid=True)
+    assert not detector.update(0.01, 0.06, 15.0, telemetry_valid=True)
+
+
+def test_target_accepts_stable_distance_and_actual_velocity_for_five_seconds():
+    detector = make_stability_detector()
+    assert not detector.update(0.01, 0.02, 10.0, telemetry_valid=True)
+    assert not detector.update(0.01, 0.02, 14.9, telemetry_valid=True)
+    assert detector.update(0.01, 0.02, 15.0, telemetry_valid=True)
+
+
+def test_velocity_telemetry_timeout_resets_stability_timer():
+    detector = make_stability_detector()
+    assert not detector.update(0.01, 0.02, 10.0, telemetry_valid=True)
+    assert not detector.update(0.01, 0.0, 14.0, telemetry_valid=False)
+    assert not detector.update(0.01, 0.02, 15.0, telemetry_valid=True)
+    assert detector.update(0.01, 0.02, 20.0, telemetry_valid=True)
