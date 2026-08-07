@@ -7,8 +7,10 @@ panel_mission:
     # ENU offsets in meters from the Local XYZ launch reference.
     # Candidate 3 m square route. Keep configuration_approved=false until
     # the operator confirms orientation, clearance, and the complete order.
-    waypoint_x_m: [0.0, 0.0, -3.0, -3.0]
-    waypoint_y_m: [0.0, -3.0, -3.0, 0.0]
+    # 3 m closed square relative to the 204.22 deg launch heading:
+    # forward -> left -> back -> right, returning to the launch point.
+    waypoint_x_m: [-1.231, 1.504, 2.735, 0.0]
+    waypoint_y_m: [-2.735, -3.966, -1.231, 0.0]
 
     takeoff_height_m: 1.1
     arrival_tolerance_m: 0.25
@@ -19,10 +21,14 @@ panel_mission:
     panel_hold_s: 3.0
     prestream_s: 2.0
     telemetry_timeout_s: 0.5
+    status_timeout_s: 3.0
 
     minimum_battery_remaining: 0.30
+    battery_id: 1  # PWR2 / PX4 BAT2
     require_enabled_sensors_healthy: true
-    ignored_unhealthy_sensor_mask: 0
+    # Explicit operator approval for this panel field test: ignore only 0x14000
+    # (XY position control + unused radio input); all other health bits remain blocking.
+    ignored_unhealthy_sensor_mask: 81920
 
     loiter_mode: AUTO.LOITER
     land_mode: AUTO.LAND

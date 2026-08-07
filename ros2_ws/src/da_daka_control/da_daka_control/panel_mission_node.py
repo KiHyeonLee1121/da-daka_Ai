@@ -184,7 +184,9 @@ class PanelMissionNode(Node):
         self.declare_parameter('panel_hold_s', 3.0)
         self.declare_parameter('prestream_s', 2.0)
         self.declare_parameter('telemetry_timeout_s', 0.5)
+        self.declare_parameter('status_timeout_s', 3.0)
         self.declare_parameter('minimum_battery_remaining', 0.30)
+        self.declare_parameter('battery_id', 0)
         self.declare_parameter('require_enabled_sensors_healthy', True)
         self.declare_parameter('ignored_unhealthy_sensor_mask', 0)
         self.declare_parameter('loiter_mode', 'AUTO.LOITER')
@@ -213,7 +215,9 @@ class PanelMissionNode(Node):
         self._panel_hold_s = float(value('panel_hold_s'))
         self._prestream_s = float(value('prestream_s'))
         self._telemetry_timeout_s = float(value('telemetry_timeout_s'))
+        self._status_timeout_s = float(value('status_timeout_s'))
         self._minimum_battery = float(value('minimum_battery_remaining'))
+        self._battery_id = int(value('battery_id'))
         self._require_health = bool(value('require_enabled_sensors_healthy'))
         self._ignored_health = int(value('ignored_unhealthy_sensor_mask'))
         self._loiter_mode = str(value('loiter_mode'))
@@ -232,6 +236,7 @@ class PanelMissionNode(Node):
             self._panel_hold_s,
             self._prestream_s,
             self._telemetry_timeout_s,
+            self._status_timeout_s,
             self._tick_rate_hz,
             self._action_retry_s,
             self._state_timeout_s,
@@ -240,6 +245,8 @@ class PanelMissionNode(Node):
             raise ValueError('panel mission timing and distance values must be positive')
         if not 0.0 <= self._minimum_battery <= 1.0:
             raise ValueError('minimum_battery_remaining must be in [0, 1]')
+        if not 0 <= self._battery_id <= 9:
+            raise ValueError('battery_id must be within [0, 9]')
         if self._ignored_health < 0:
             raise ValueError('ignored_unhealthy_sensor_mask cannot be negative')
 
@@ -315,6 +322,8 @@ class PanelMissionNode(Node):
             self._velocity_time_s = time.monotonic()
 
     def _battery(self, message: BatteryState) -> None:
+        if message.location != f'id{self._battery_id}':
+            return
         remaining = float(message.percentage)
         self._battery_remaining = remaining if math.isfinite(remaining) else None
         self._battery_time_s = time.monotonic()
@@ -355,7 +364,7 @@ class PanelMissionNode(Node):
     def _precheck_failures(self, now_s: float) -> list[str]:
         failures = status_failures(
             now_s=now_s,
-            timeout_s=self._telemetry_timeout_s,
+            timeout_s=self._status_timeout_s,
             battery_remaining=self._battery_remaining,
             battery_time_s=self._battery_time_s,
             minimum_battery_remaining=self._minimum_battery,

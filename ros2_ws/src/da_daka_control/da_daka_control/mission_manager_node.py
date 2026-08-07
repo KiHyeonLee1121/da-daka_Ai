@@ -364,6 +364,7 @@ class MissionManagerNode(Node):
         self.declare_parameter('telemetry_timeout', 0.5)
         self.declare_parameter('status_timeout', 2.0)
         self.declare_parameter('minimum_battery_remaining', 0.30)
+        self.declare_parameter('battery_id', 0)
         self.declare_parameter('require_on_ground_at_start', True)
         self.declare_parameter('require_enabled_sensors_healthy', True)
         self.declare_parameter('ignored_unhealthy_sensor_mask', 0)
@@ -406,6 +407,7 @@ class MissionManagerNode(Node):
         self._minimum_battery_remaining = float(
             value('minimum_battery_remaining')
         )
+        self._battery_id = int(value('battery_id'))
         self._require_on_ground_at_start = bool(
             value('require_on_ground_at_start')
         )
@@ -476,6 +478,8 @@ class MissionManagerNode(Node):
             raise ValueError('mission timing and distance values must be > 0')
         if not 0.0 <= self._minimum_battery_remaining <= 1.0:
             raise ValueError('minimum_battery_remaining must be within [0, 1]')
+        if not 0 <= self._battery_id <= 9:
+            raise ValueError('battery_id must be within [0, 9]')
         if self._max_retries < 0:
             raise ValueError('max_retries cannot be negative')
         if self._ignored_unhealthy_sensor_mask < 0:
@@ -624,6 +628,8 @@ class MissionManagerNode(Node):
             self._relative_altitude_m = relative
 
     def _battery_callback(self, message: BatteryState) -> None:
+        if message.location != f'id{self._battery_id}':
+            return
         remaining = float(message.percentage)
         if math.isfinite(remaining) and 0.0 <= remaining <= 1.0:
             self._battery_remaining = remaining

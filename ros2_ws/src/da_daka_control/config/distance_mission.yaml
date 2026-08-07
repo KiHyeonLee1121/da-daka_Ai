@@ -9,14 +9,15 @@ mission_manager:
     # Health and total distance-control limits
     sensor_timeout: 0.3
     telemetry_timeout: 0.5
-    status_timeout: 2.0
+    status_timeout: 3.0
     distance_control_timeout: 20.0
-    minimum_battery_remaining: 0.20
+    minimum_battery_remaining: 0.10
+    battery_id: 1  # PWR2 / PX4 BAT2
     require_on_ground_at_start: true
     require_enabled_sensors_healthy: true
-    # Do not bypass PX4 health failures. The temporary 2026-08-03
-    # 0x14000 exception (XY position control + unused radio input) is retired.
-    ignored_unhealthy_sensor_mask: 0
+    # Explicit field-test approval: ignore only 0x14000
+    # (XY position control + unused radio input); all other health bits remain blocking.
+    ignored_unhealthy_sensor_mask: 81920
 
     # Non-blocking FSM and retry policy
     fsm_rate_hz: 20.0
