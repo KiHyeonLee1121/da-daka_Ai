@@ -11,7 +11,7 @@ mission_manager:
     telemetry_timeout: 0.5
     status_timeout: 2.0
     distance_control_timeout: 20.0
-    minimum_battery_remaining: 0.30
+    minimum_battery_remaining: 0.20
     require_on_ground_at_start: true
     require_enabled_sensors_healthy: true
     # Do not bypass PX4 health failures. The temporary 2026-08-03
