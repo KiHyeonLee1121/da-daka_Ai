@@ -22,7 +22,7 @@ Raspberry Pi 5 (Docker 호스트)
       ├─ mavlink-router
       ├─ ROS 2 Jazzy / MAVROS
       ├─ TF-Luna 거리 입력, 필터, 1 m 거리제어
-      ├─ 단일 Mission Manager
+      ├─ 거리 또는 패널 Mission Manager (동시 실행 금지)
       ├─ 카메라 및 오염 검출
       └─ 분사제어
                  ↕ Serial MAVLink
@@ -30,8 +30,9 @@ Pixhawk 4 / PX4
   └─ 자세 안정화와 저수준 비행제어
 ```
 
-비행 순서와 PX4 모드 전환 권한은 ROS 2 `mission_manager` 하나로
-제한한다. 거리 오차에 따른 속도 setpoint는 활성화된
+비행 순서와 PX4 모드 전환 권한은 비행별 ROS 2 Mission Manager 하나로
+제한한다. 거리 Mission Manager와 Panel Mission은 동시에 실행하지 않는다.
+거리 오차에 따른 속도 setpoint는 활성화된
 `distance_controller`만 발행한다. 기존 `main.py`의 `MavlinkBridge`와
 ROS 2 거리제어를 동시에 live 모드로 실행하면 안 된다. AI 코드는 검출
 결과를 제공하고, 분사 코드는 서비스 요청을 처리하는 방향으로 통합할
@@ -79,6 +80,12 @@ Local Z와 LiDAR 제어를 OFFBOARD 안에서 바로 교체하지 않는다. 두
 재진입한다. 실제 비행 전에 반드시 프로펠러 제거 벤치 시험과 QGC 모드 확인을
 먼저 수행해야 한다.
 
+현재 Raspberry Pi 실기체 설정은 PWR2/PX4 Battery 2를 사용하며 두 Mission
+Manager 모두 MAVROS `BatteryState.location=id1`만 안전검사에 사용한다.
+거리 미션의 Battery/PX4 status timeout은 3초, 시작 최소 배터리는 10%다.
+현장 승인값 `ignored_unhealthy_sensor_mask=0x14000`은 해당 비트만 예외로
+처리하며 PX4 Low-battery failsafe와 다른 health bit는 계속 차단한다.
+
 세부 파라미터, ROS 인터페이스와 실행 절차는
 [`ros2_ws/src/da_daka_control/README.md`](ros2_ws/src/da_daka_control/README.md)에
 정리되어 있다.
@@ -92,17 +99,22 @@ Local Z와 LiDAR 제어를 OFFBOARD 안에서 바로 교체하지 않는다. 두
 
 - 시작·중단 서비스: `/panel_mission/start`, `/panel_mission/abort`
 - 상태·결과 토픽: `/panel_mission/state`, `/panel_mission/result`
-- 기본 경로 후보: 3 m 시계방향 정사각형
-  `(0,0) → (0,-3) → (-3,-3) → (-3,0)`
+- 현재 검증 경로: 출발 heading `204.22°` 기준 3 m 폐곡선 정사각형
+  `(-1.231,-2.735) → (1.504,-3.966) → (2.735,-1.231) → (0,0)`
 - 수평 position setpoint 진행속도: 최대 `0.30 m/s`
 - 좌표 승인 기본값: `configuration_approved=false`
+- Battery 2 선택: `battery_id=1`, 시작 최소 배터리 30%
+- Local pose/velocity timeout: 0.5초, Battery/PX4 status timeout: 3초
+- 현재 현장 승인 health 예외: `0x14000`만 허용, 다른 bit는 계속 차단
 - 거리제어와 패널 이동 setpoint 소유권 충돌 시 시작 거부 또는 중단
 - QGC/PX4의 LOITER·LAND·OFFBOARD 이탈을 우선하고 자동 재진입하지 않음
 - 기존 `altitude_guard`를 재사용하며 패널 시험 launch의 상승 한도는 `2.5 m`
 
-실제 좌표·방향·시험구역을 확인하고 PX4 health 오류가 모두 해소되기 전에는
-`configuration_approved`를 `true`로 바꾸지 않는다. 패널 시험 launch는
-자동으로 비행하지 않으며 명시적인 start 서비스가 필요하다.
+위 좌표는 당시 기체 heading을 ENU로 변환한 현장값이다. 새 위치·새 heading에서
+그대로 재사용하지 않고 실제 방향·시험구역을 다시 확인한다. 모든 GO 조건과
+승인 health mask를 확인하기 전에는 `configuration_approved`를 `true`로
+바꾸지 않는다. 패널 시험 launch는 자동으로 비행하지 않으며 명시적인 start
+서비스가 필요하다.
 
 ## 2026-07-24 Raspberry Pi 제어구조 개편 작업
 

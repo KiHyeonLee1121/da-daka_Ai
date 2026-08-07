@@ -91,10 +91,24 @@ launch에는 Local Z 이륙용 `distance_controller`, `panel_mission`, 기존
 거부한다. 거리제어 Mission Manager 또는 다른 position/velocity setpoint
 발행자와 동시에 실행하지 않는다.
 
-현재 후보 경로는 출발점 기준 3 m 시계방향 정사각형이며, position setpoint는
-수평 최대 `0.30 m/s`, 수직 최대 `0.20 m/s`로 점진 이동한다. 이는 PX4 실제
-속도의 절대 상한이 아니므로 실제 velocity telemetry와 PX4 제한 파라미터를
-함께 확인해야 한다.
+현재 검증 경로는 출발 heading `204.22°`를 ENU로 변환한 3 m 폐곡선이다.
+
+```text
+waypoint_x_m=[-1.231, 1.504, 2.735, 0.0]
+waypoint_y_m=[-2.735, -3.966, -1.231, 0.0]
+```
+
+정면 3 m, 왼쪽 3 m, 뒤 3 m, 오른쪽 3 m 순서로 이동해 출발점으로 복귀한다.
+이 좌표는 현장 heading에 종속되므로 새 위치나 새 기체 방향에서 그대로
+승인하지 않는다. position setpoint는 수평 최대 `0.30 m/s`, 수직 최대
+`0.20 m/s`로 점진 이동한다. 이는 PX4 실제 속도의 절대 상한이 아니므로 실제
+velocity telemetry와 PX4 제한 파라미터를 함께 확인해야 한다.
+
+패널 Mission은 PWR2/PX4 Battery 2에 해당하는 `battery_id=1`만 사용한다.
+Local pose/velocity timeout은 0.5초로 유지하고, 약 0.5 Hz Battery 2와 PX4
+status에는 별도 `status_timeout_s=3.0`을 적용한다. 시작 최소 배터리는 30%다.
+현재 현장 승인 `ignored_unhealthy_sensor_mask=0x14000`은 해당 비트만 예외로
+처리하며 PX4 Low-battery failsafe와 다른 health bit는 계속 차단한다.
 
 TF-Luna 드라이버는 별도 launch로 실행하며, 이 노드만 TF-Luna Serial
 장치를 점유해야 한다.
@@ -142,9 +156,12 @@ ros2 topic hz /distance/filtered
 - 거리 목표: 하향 TF-Luna 기준 1.0 m
 - 제어 최대속도: 0.25 m/s
 - 센서 timeout: 0.3 s
-- 상태 텔레메트리 timeout: 2.0 s
-- 시작 최소 배터리: 30%
+- Local pose/velocity telemetry timeout: 0.5 s
+- Battery/PX4 status timeout: 3.0 s
+- 시작 최소 배터리: 10%
+- PWR2/PX4 Battery 2 선택: `battery_id=1`
 - 시작 시 PX4 착륙 상태와 활성 센서 health 확인
+- 현재 현장 승인 health 예외: `0x14000`만 허용, 다른 bit는 계속 차단
 - 목표 판정: 오차 ±0.08 m, 수직속도 0.05 m/s 이하, 연속 5 s
 - 전체 거리제어 timeout: 20 s
 - 출발 지점 기준 비상 착륙 상승 한도: 5.0 m
@@ -230,13 +247,19 @@ setpoint stream을 유지하면서 AUTO.LAND를 요청하고 실제 모드 전�
 미션을 시작하면 CSV가 자동 생성된다.
 
 ```text
-~/da_daka_logs/distance_mission/distance_mission_YYYYMMDD_HHMMSS_ffffff.csv
+/workspace/logs/distance_mission/distance_mission_YYYYMMDD_HHMMSS_ffffff.csv
+```
+
+Raspberry Pi 호스트에서는 bind mount를 통해 다음 경로에 저장된다.
+
+```text
+/home/kihyeon/da-daka_Ai/ros2_ws/logs/distance_mission/
 ```
 
 외부 모드 개입 여부와 개입 모드도 CSV에 기록한다.
 
 ```bash
-latest=$(ls -t ~/da_daka_logs/distance_mission/*.csv | head -1)
+latest=$(ls -t /workspace/logs/distance_mission/*.csv | head -1)
 tail -20 "$latest"
 ```
 
