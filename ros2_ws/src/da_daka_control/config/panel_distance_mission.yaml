@@ -56,7 +56,7 @@ panel_distance_mission:
     launch_yaw_max_deviation_deg: 2.0
     # The 3 m LiDAR climb is intentionally limited to 0.20 m/s and needs
     # additional time to settle inside the panel takeoff's +/-0.30 m window.
-    takeoff_timeout_s: 60.0
+    takeoff_timeout_s: 40.0
 
     # The panel launch applies kp=0.70, ki=0.0, kd=0.15 and a 2.9 s / 90 percent
     # stability window while retaining +/-0.10 m and <=0.05 m/s limits.

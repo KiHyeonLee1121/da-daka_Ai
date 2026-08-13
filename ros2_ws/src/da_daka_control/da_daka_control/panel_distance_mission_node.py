@@ -264,7 +264,7 @@ class PanelDistanceMissionNode(Node):
         self.declare_parameter('yaw_alignment_stable_s', 0.5)
         self.declare_parameter('launch_yaw_stable_duration_s', 1.0)
         self.declare_parameter('launch_yaw_max_deviation_deg', 2.0)
-        self.declare_parameter('takeoff_timeout_s', 60.0)
+        self.declare_parameter('takeoff_timeout_s', 40.0)
         self.declare_parameter('distance_control_timeout_s', 20.0)
         self.declare_parameter('target_hold_confirm_duration_s', 0.2)
         self.declare_parameter('sensor_timeout_s', 0.3)
