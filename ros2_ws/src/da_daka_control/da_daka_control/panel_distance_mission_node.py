@@ -243,7 +243,7 @@ class PanelDistanceMissionNode(Node):
         self.declare_parameter('configuration_approved', False)
         self.declare_parameter('waypoint_forward_m', [0.0])
         self.declare_parameter('waypoint_left_m', [0.0])
-        self.declare_parameter('takeoff_height_m', 2.0)
+        self.declare_parameter('takeoff_height_m', 3.0)
         self.declare_parameter('target_distance_m', 1.0)
         self.declare_parameter('arrival_tolerance_m', 0.25)
         self.declare_parameter('arrival_max_speed_mps', 0.10)

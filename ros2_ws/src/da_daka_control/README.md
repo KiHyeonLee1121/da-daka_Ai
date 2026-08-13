@@ -112,11 +112,11 @@ status에는 별도 `status_timeout_s=3.0`을 적용한다. 시작 최소 배터
 
 ## 패널 순회 후 역방향 거리제어 미션
 
-`panel_distance_mission`은 LiDAR 바닥거리 2.0 m로 이륙한 뒤 패널 1→4를
+`panel_distance_mission`은 LiDAR 바닥거리 3.0 m로 이륙한 뒤 패널 1→4를
 순방향으로 순회한다. 이동 중 Local X/Y로 경로를 따라가고 Z setpoint는 LiDAR
-오차로 계속 보정해 2.0 m를 유지한다. 도착은 Local XY 오차와 LiDAR 높이를
+오차로 계속 보정해 3.0 m를 유지한다. 도착은 Local XY 오차와 LiDAR 높이를
 분리해서 판정한다. 패널 4→1 역방향에서는 각 지점에서 LiDAR 1.0 m 거리제어를
-수행한 다음 자동 착륙한다. 역방향 이동은 사용자 요청에 따라 2.0 m로
+수행한 다음 자동 착륙한다. 역방향 이동은 사용자 요청에 따라 3.0 m로
 재상승하지 않고 직전 거리홀드 목표인 1.0 m를 유지한다. 따라서 순방향 이동은
 `takeoff_height_m`, 역방향 이동은 `target_distance_m`를 LiDAR 목표로
 사용한다. 이 방식은 기존 재상승 설계보다 수직 안전 여유가 작으므로 실제 이동
@@ -160,7 +160,7 @@ setpoint 속도는 `/panel_distance_mission/horizontal_setpoint_speed`에 기록
 
 ```bash
 ros2 launch da_daka_control panel_distance_mission.launch.py \
-  configuration_approved:=true takeoff_height_m:=2.0
+  configuration_approved:=true takeoff_height_m:=3.0
 ros2 service call /panel_distance_mission/start std_srvs/srv/Trigger "{}"
 ros2 service call /panel_distance_mission/abort std_srvs/srv/Trigger "{}"
 ```

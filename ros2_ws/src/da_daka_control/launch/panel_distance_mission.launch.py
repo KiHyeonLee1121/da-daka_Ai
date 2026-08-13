@@ -47,7 +47,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 'takeoff_height_m',
-                default_value='2.0',
+                default_value='3.0',
                 description='Shared LiDAR takeoff and route height in meters',
             ),
             Node(
@@ -70,7 +70,8 @@ def generate_launch_description() -> LaunchDescription:
                             takeoff_height_m,
                             value_type=float,
                         ),
-                        # The 2 m flight test showed sustained overshoot with
+                        # The earlier 2 m flight test showed sustained
+                        # overshoot with
                         # the shared 1.1 m takeoff tuning (0.4 m/s, kp=0.8).
                         # Keep the verified single-distance mission unchanged
                         # and use a gentler approach only for this longer climb.
@@ -139,7 +140,8 @@ def generate_launch_description() -> LaunchDescription:
                 output='screen',
                 parameters=[
                     guard_config,
-                    {'maximum_climb_m': 3.0},
+                    # Keep a 1 m emergency margin above the 3 m patrol height.
+                    {'maximum_climb_m': 4.0},
                 ],
             ),
         ]
