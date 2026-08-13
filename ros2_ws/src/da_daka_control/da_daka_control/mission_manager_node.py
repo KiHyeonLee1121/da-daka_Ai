@@ -898,7 +898,7 @@ class MissionManagerNode(Node):
         )
 
     def _tick_takeoff(self, _now_s: float) -> None:
-        """Latch launch Local Z and activate zero-setpoint prestream."""
+        """Enable the configured takeoff reference and zero prestream."""
         if self._local_takeoff_enabled:
             self._transition(MissionState.PRESTREAM_SETPOINT)
             return
@@ -909,7 +909,7 @@ class MissionManagerNode(Node):
             self._abort('local takeoff controller unexpectedly disabled')
             return
         if self._mode != 'OFFBOARD':
-            self._abort(f'OFFBOARD lost during Local Z takeoff: {self._mode}')
+            self._abort(f'OFFBOARD lost during takeoff: {self._mode}')
             return
         if self._hover_window.update(
             self._local_takeoff_target_reached,
@@ -948,14 +948,14 @@ class MissionManagerNode(Node):
         if self._prestream_started_s is None:
             self._prestream_started_s = now_s
             self.get_logger().info(
-                'Local takeoff controller enabled; zero prestream started'
+                'Takeoff controller enabled; zero prestream started'
             )
         if now_s - self._prestream_started_s >= self._prestream_s:
             self._transition(MissionState.ENTER_OFFBOARD)
 
     def _tick_enable(self, now_s: float) -> None:
-        # The vertical controller rejects simultaneous modes. Disable Local Z
-        # first, then enable LiDAR control while PX4 holds AUTO.LOITER.
+        # The vertical controller rejects simultaneous modes. Disable takeoff
+        # control first, then enable hold control while PX4 is in AUTO.LOITER.
         if not self._handover_mode_is_expected(
             self._state,
             self._mode,

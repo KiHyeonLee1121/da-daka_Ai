@@ -45,7 +45,12 @@ def generate_launch_description() -> LaunchDescription:
                 executable='distance_controller',
                 name='distance_controller',
                 output='screen',
-                parameters=[controller_config],
+                # This test mission uses TF-Luna for takeoff height, target
+                # arrival, and distance hold. Panel missions keep Local Z.
+                parameters=[
+                    controller_config,
+                    {'takeoff_reference': 'lidar'},
+                ],
             ),
             Node(
                 package='da_daka_control',

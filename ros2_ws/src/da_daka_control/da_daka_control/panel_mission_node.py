@@ -185,7 +185,7 @@ class PanelMissionNode(Node):
         self.declare_parameter('prestream_s', 2.0)
         self.declare_parameter('telemetry_timeout_s', 0.5)
         self.declare_parameter('status_timeout_s', 3.0)
-        self.declare_parameter('minimum_battery_remaining', 0.30)
+        self.declare_parameter('minimum_battery_remaining', 0.15)
         self.declare_parameter('battery_id', 0)
         self.declare_parameter('require_enabled_sensors_healthy', True)
         self.declare_parameter('ignored_unhealthy_sensor_mask', 0)

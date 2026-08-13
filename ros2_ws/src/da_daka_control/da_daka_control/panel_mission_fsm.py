@@ -203,6 +203,13 @@ class PanelRoute:
         self._index += 1
         return True
 
+    def retreat(self) -> bool:
+        """Step backward and return false once the first panel is reached."""
+        if self._index == 0:
+            return False
+        self._index -= 1
+        return True
+
 
 class PanelMissionFsm:
     """Hold mission state without performing ROS or MAVLink I/O."""

@@ -1,7 +1,7 @@
 mission_manager:
   ros__parameters:
-    # Distance-control test profile. Local Z climb height, tolerance and speed
-    # limits belong to distance_controller.yaml, not this test orchestrator.
+    # Distance-control test profile. The launch selects LiDAR takeoff; target,
+    # tolerance and speed limits live in distance_controller.yaml.
     hover_hold_duration: 2.0
     prestream_duration: 2.0
     target_hold_confirm_duration: 0.2

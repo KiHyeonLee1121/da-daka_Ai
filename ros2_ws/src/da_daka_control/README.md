@@ -106,9 +106,59 @@ velocity telemetry와 PX4 제한 파라미터를 함께 확인해야 한다.
 
 패널 Mission은 PWR2/PX4 Battery 2에 해당하는 `battery_id=1`만 사용한다.
 Local pose/velocity timeout은 0.5초로 유지하고, 약 0.5 Hz Battery 2와 PX4
-status에는 별도 `status_timeout_s=3.0`을 적용한다. 시작 최소 배터리는 30%다.
+status에는 별도 `status_timeout_s=3.0`을 적용한다. 시작 최소 배터리는 15%다.
 현재 현장 승인 `ignored_unhealthy_sensor_mask=0x14000`은 해당 비트만 예외로
 처리하며 PX4 Low-battery failsafe와 다른 health bit는 계속 차단한다.
+
+## 패널 순회 후 역방향 거리제어 미션
+
+`panel_distance_mission`은 LiDAR 바닥거리 2.0 m로 이륙한 뒤 패널 1→4를
+순방향으로 순회한다. 이동 중 Local X/Y로 경로를 따라가고 Z setpoint는 LiDAR
+오차로 계속 보정해 2.0 m를 유지한다. 도착은 Local XY 오차와 LiDAR 높이를
+분리해서 판정한다. 패널 4→1 역방향에서는 각 지점에서 LiDAR 1.0 m 거리제어를
+수행한 다음 자동 착륙한다. 역방향 이동은 사용자 요청에 따라 2.0 m로
+재상승하지 않고 직전 거리홀드 목표인 1.0 m를 유지한다. 따라서 순방향 이동은
+`takeoff_height_m`, 역방향 이동은 `target_distance_m`를 LiDAR 목표로
+사용한다. 이 방식은 기존 재상승 설계보다 수직 안전 여유가 작으므로 실제 이동
+경로의 장애물 확인이 필수다.
+
+경로는 실제 패널을 탐지하지 않고 출발 기수 기준 3 m 정사각형의 네 꼭짓점에
+패널이 있다고 가정한다. 노드는 ARM 직전의 ENU 위치와 yaw를 한 번 저장하고,
+`waypoint_forward_m`/`waypoint_left_m` 오프셋을 해당 yaw로 ENU에 고정한다.
+따라서 기체의 초기 방향이 바뀌어도 좌표를 다시 계산할 필요가 없다. 이륙과
+1 m 거리제어의 velocity setpoint 및 순찰 position setpoint에는 같은 최초 yaw를
+사용하며, 수평 이동 전 yaw가 ±5도 안에서 0.5초간 유지되어야 한다. 역방향은
+현재 꼭짓점의 1 m 거리제어를 먼저 완료한 뒤 다음 꼭짓점으로 이동하기 직전에
+이 조건을 확인한다. 출발 yaw는 ARM 전 1초간 최대 편차 ±2도 이내인 샘플의
+원형 평균으로 고정하며, 오래됐거나 비정상인 quaternion은 재사용하지 않는다.
+마지막 역방향 꼭짓점 A에서도 1 m 거리제어를 완료한 뒤 같은 yaw 조건을
+확인하고, 1 m 이동고도로 이륙 원점 O까지 복귀한 다음 AUTO.LAND한다.
+
+패널 미션의 정밀 거리제어는 10초 이내 완료를 목표로 `kp=0.70`, `ki=0.0`,
+`kd=0.15`를 사용한다. D항은 인접 LiDAR 샘플을 직접 미분하지 않고 기존 0.5초
+거리 변화율을 사용한다. 성공 판정의 거리 ±0.10 m와 변화율 0.05 m/s 기준은
+유지하되, 최근 2.9초 샘플 중 90% 이상이 조건을 만족해야 한다. 순간 LiDAR
+노이즈는 제한적으로 허용하지만 MAVROS 수직속도도 0.05 m/s 이하여야 한다.
+2026-08-12 두 로그를 실제 20 Hz 판정 주기로 재생하면 각각 약 9.959초와
+9.493초에 성공하며, 비정상 접근 제한시간은 15초다. 단일 거리제어 미션은 기존
+`kp=0.60`, 변화율 0.05 m/s 이하 연속 5초 조건을 유지한다.
+
+일반 `panel_mission`은 기존 Local Z 방식이며 거리 PID의 D gain이나 LiDAR
+±10 cm 성공 판정을 사용하지 않는다. 두 패널 미션의 시작 최소 배터리는 15%다.
+
+기본 실행은 안전하게 잠겨 있다. 현장에서 방향, 좌표, 이륙 및 이동 경로의
+여유 공간을 확인한 뒤에만 다음처럼 승인 인자를 명시한다.
+
+```bash
+ros2 launch da_daka_control panel_distance_mission.launch.py \
+  configuration_approved:=true takeoff_height_m:=2.0
+ros2 service call /panel_distance_mission/start std_srvs/srv/Trigger "{}"
+ros2 service call /panel_distance_mission/abort std_srvs/srv/Trigger "{}"
+```
+
+승인 인자를 생략하거나 `false`로 주면 `/panel_distance_mission/start` 요청을
+거부한다. 거리 Mission Manager, 독립 패널 미션 또는 다른 position/velocity
+setpoint 발행자와 동시에 실행하지 않는다.
 
 TF-Luna 드라이버는 별도 launch로 실행하며, 이 노드만 TF-Luna Serial
 장치를 점유해야 한다.
@@ -149,33 +199,34 @@ ros2 topic hz /distance/filtered
 
 ## 거리제어 기준
 
-- 이륙 목표: Arm 후 latch한 Local Z 기준 +1.1 m
-- Local Z 최대 상승속도: 0.4 m/s
-- Local Z 최대 명령 가속도: 0.5 m/s²
-- Local Z 외부 P gain: 0.8
+- 이륙 목표: 하향 TF-Luna 절대 바닥거리 1.1 m
+- LiDAR 이륙 최대 상승속도: 0.4 m/s
+- LiDAR 이륙 최대 명령 가속도: 0.5 m/s²
+- LiDAR 이륙 외부 P gain: 0.8
 - 거리 목표: 하향 TF-Luna 기준 1.0 m
 - 제어 최대속도: 0.25 m/s
 - 센서 timeout: 0.3 s
-- Local pose/velocity telemetry timeout: 0.5 s
+- LiDAR 거리 및 0.5초 구간 거리 변화율로 이륙/목표 도달 판정
+- Local pose telemetry는 비상 고도 감시와 MAVROS 연결 상태 확인에만 사용
 - Battery/PX4 status timeout: 3.0 s
 - 시작 최소 배터리: 10%
 - PWR2/PX4 Battery 2 선택: `battery_id=1`
 - 시작 시 PX4 착륙 상태와 활성 센서 health 확인
 - 현재 현장 승인 health 예외: `0x14000`만 허용, 다른 bit는 계속 차단
-- 목표 판정: 오차 ±0.08 m, 수직속도 0.05 m/s 이하, 연속 5 s
+- 목표 판정: 오차 ±0.10 m, LiDAR 거리 변화율 0.05 m/s 이하, 연속 5 s
 - 전체 거리제어 timeout: 20 s
 - 출발 지점 기준 비상 착륙 상승 한도: 5.0 m
 
 거리제어 시험 흐름은 다음과 같다.
 
 ```text
-PRECHECK -> ARM -> Local Z zero prestream -> OFFBOARD
--> Local Z +1.1 m hold -> AUTO.LOITER
--> Local Z OFF -> LiDAR ON/prestream -> OFFBOARD distance control
+PRECHECK -> ARM -> LiDAR zero prestream -> OFFBOARD
+-> LiDAR 1.1 m hold -> AUTO.LOITER
+-> takeoff control OFF -> LiDAR 1.0 m ON/prestream -> OFFBOARD
 -> AUTO.LOITER -> LiDAR OFF -> AUTO.LAND
 ```
 
-Local Z와 LiDAR 모드는 상호배제된다. 모드 교체는 OFFBOARD에서 직접
+이륙 LiDAR 제어와 1.0 m 거리제어는 상호배제된다. 모드 교체는 OFFBOARD에서 직접
 setpoint를 끊지 않고, PX4가 `AUTO.LOITER`를 확인한 뒤 수행한다.
 
 ## 다른 미션에서 제어 기능 재사용

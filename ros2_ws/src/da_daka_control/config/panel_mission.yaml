@@ -7,23 +7,28 @@ panel_mission:
     # ENU offsets in meters from the Local XYZ launch reference.
     # Candidate 3 m square route. Keep configuration_approved=false until
     # the operator confirms orientation, clearance, and the complete order.
-    # 3 m closed square relative to the 204.22 deg launch heading:
+    # 3 m closed square relative to the ~124.84 deg launch heading
+    # (re-recomputed 2026-08-12 after the drone was repositioned following
+    # the forced-landing test; same physical launch spot, new nose
+    # direction -- see panel_distance_mission.yaml for the same
+    # recomputation). NOT physically clearance-surveyed like the original
+    # 204.22 deg route -- only reconstructed geometrically.
     # forward -> left -> back -> right, returning to the launch point.
-    waypoint_x_m: [-1.231, 1.504, 2.735, 0.0]
-    waypoint_y_m: [-2.735, -3.966, -1.231, 0.0]
+    waypoint_x_m: [2.462, 4.176, 1.714, 0.0]
+    waypoint_y_m: [-1.714, 0.748, 2.462, 0.0]
 
     takeoff_height_m: 1.1
     arrival_tolerance_m: 0.25
     arrival_max_speed_mps: 0.10
     arrival_stable_s: 2.0
-    maximum_horizontal_setpoint_speed_mps: 0.30
+    maximum_horizontal_setpoint_speed_mps: 0.40
     maximum_vertical_setpoint_speed_mps: 0.20
     panel_hold_s: 3.0
     prestream_s: 2.0
     telemetry_timeout_s: 0.5
     status_timeout_s: 3.0
 
-    minimum_battery_remaining: 0.30
+    minimum_battery_remaining: 0.15
     battery_id: 1  # PWR2 / PX4 BAT2
     require_enabled_sensors_healthy: true
     # Explicit operator approval for this panel field test: ignore only 0x14000

@@ -33,7 +33,10 @@ def generate_launch_description() -> LaunchDescription:
                 executable='distance_controller',
                 name='distance_controller',
                 output='screen',
-                parameters=[controller_config],
+                parameters=[
+                    controller_config,
+                    {'takeoff_reference': 'local_z'},
+                ],
             ),
             Node(
                 package='da_daka_control',

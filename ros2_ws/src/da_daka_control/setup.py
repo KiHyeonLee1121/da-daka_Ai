@@ -41,6 +41,7 @@ setup(
             'mission_manager = da_daka_control.mission_manager_node:main',
             'altitude_guard = da_daka_control.altitude_guard:main',
             'panel_mission = da_daka_control.panel_mission_node:main',
+            'panel_distance_mission = da_daka_control.panel_distance_mission_node:main',
         ],
     },
 )
