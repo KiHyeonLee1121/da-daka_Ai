@@ -3,6 +3,7 @@
 import math
 
 from da_daka_control.panel_distance_mission_fsm import (
+    advance_slowed_position_setpoint,
     body_offset_to_enu,
     lidar_referenced_local_z_target,
     MissionPhase,
@@ -13,6 +14,86 @@ from da_daka_control.panel_distance_mission_fsm import (
 )
 from da_daka_control.panel_mission_fsm import PanelRoute, RelativeWaypoint
 import pytest
+
+
+def advance_horizontal_profile(
+    current_xyz=(0.0, 0.0, 1.0),
+    target_xyz=(3.0, 0.0, 1.0),
+    actual_xy=(0.0, 0.0),
+    current_speed=0.0,
+    dt_s=0.1,
+):
+    """Advance the panel mission's configured horizontal profile once."""
+    return advance_slowed_position_setpoint(
+        current_xyz,
+        target_xyz,
+        actual_xy,
+        current_horizontal_speed_mps=current_speed,
+        maximum_horizontal_speed_mps=0.8,
+        maximum_horizontal_accel_mps2=0.6,
+        horizontal_slow_zone_m=1.2,
+        minimum_approach_speed_mps=0.12,
+        target_snap_distance_m=0.05,
+        maximum_vertical_speed_mps=0.2,
+        dt_s=dt_s,
+    )
+
+
+def test_horizontal_profile_accelerates_at_configured_limit():
+    position, speed = advance_horizontal_profile()
+
+    assert speed == pytest.approx(0.06)
+    assert position == pytest.approx((0.006, 0.0, 1.0))
+
+
+def test_horizontal_profile_cruises_at_point_eight_mps():
+    position, speed = advance_horizontal_profile(current_speed=0.8)
+
+    assert speed == pytest.approx(0.8)
+    assert position == pytest.approx((0.08, 0.0, 1.0))
+
+
+def test_horizontal_profile_slows_over_final_one_point_two_metres():
+    position, speed = advance_horizontal_profile(
+        current_xyz=(2.4, 0.0, 1.0),
+        actual_xy=(2.4, 0.0),
+        current_speed=0.4,
+    )
+
+    assert speed == pytest.approx(0.4)
+    assert position == pytest.approx((2.44, 0.0, 1.0))
+
+
+def test_actual_aircraft_position_can_trigger_early_slowdown():
+    _, speed = advance_horizontal_profile(
+        current_xyz=(2.0, 0.0, 1.0),
+        actual_xy=(2.7, 0.0),
+        current_speed=0.8,
+    )
+
+    assert speed == pytest.approx(0.74)
+
+
+def test_horizontal_profile_keeps_minimum_speed_until_snap_zone():
+    position, speed = advance_horizontal_profile(
+        current_xyz=(2.9, 0.0, 1.0),
+        actual_xy=(2.9, 0.0),
+        current_speed=0.12,
+    )
+
+    assert speed == pytest.approx(0.12)
+    assert position == pytest.approx((2.912, 0.0, 1.0))
+
+
+def test_horizontal_profile_snaps_to_corner_inside_five_cm():
+    position, speed = advance_horizontal_profile(
+        current_xyz=(2.96, 0.0, 0.8),
+        actual_xy=(2.94, 0.0),
+        current_speed=0.12,
+    )
+
+    assert speed == 0.0
+    assert position == pytest.approx((3.0, 0.0, 0.82))
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,7 @@ from typing import Callable, Optional
 
 from da_daka_control.mission_manager_node import status_failures
 from da_daka_control.panel_distance_mission_fsm import (
+    advance_slowed_position_setpoint,
     body_offset_to_enu,
     lidar_referenced_local_z_target,
     MissionPhase,
@@ -27,7 +28,6 @@ from da_daka_control.panel_distance_mission_fsm import (
     wrapped_yaw_error,
 )
 from da_daka_control.panel_mission_fsm import (
-    advance_position_setpoint,
     control_ownership_failures,
     PanelRoute,
     RelativeWaypoint,
@@ -95,6 +95,11 @@ class PanelDistanceMissionNode(Node):
         self._yaw_target_publisher = self.create_publisher(
             Float32,
             '/vertical_control/yaw_target',
+            qos_profile_sensor_data,
+        )
+        self._horizontal_setpoint_speed_publisher = self.create_publisher(
+            Float32,
+            '/panel_distance_mission/horizontal_setpoint_speed',
             qos_profile_sensor_data,
         )
         self.create_service(
@@ -221,6 +226,7 @@ class PanelDistanceMissionNode(Node):
         self._distance_control_started_s: Optional[float] = None
         self._distance_hold_started_s: Optional[float] = None
         self._command_xyz: Optional[tuple[float, float, float]] = None
+        self._horizontal_setpoint_speed_mps = 0.0
         self._last_setpoint_s = time.monotonic()
         self._pending_action: Optional[str] = None
         self._last_action_s: dict[str, float] = {}
@@ -242,7 +248,11 @@ class PanelDistanceMissionNode(Node):
         self.declare_parameter('arrival_tolerance_m', 0.25)
         self.declare_parameter('arrival_max_speed_mps', 0.10)
         self.declare_parameter('arrival_stable_s', 2.0)
-        self.declare_parameter('maximum_horizontal_setpoint_speed_mps', 0.40)
+        self.declare_parameter('maximum_horizontal_setpoint_speed_mps', 0.80)
+        self.declare_parameter('horizontal_setpoint_max_accel_mps2', 0.60)
+        self.declare_parameter('horizontal_slow_zone_m', 1.20)
+        self.declare_parameter('horizontal_min_approach_speed_mps', 0.12)
+        self.declare_parameter('horizontal_target_snap_distance_m', 0.05)
         self.declare_parameter('maximum_vertical_setpoint_speed_mps', 0.20)
         self.declare_parameter('cruise_lidar_tolerance_m', 0.10)
         self.declare_parameter('cruise_lidar_gain', 1.0)
@@ -288,6 +298,18 @@ class PanelDistanceMissionNode(Node):
         self._arrival_stable_s = float(value('arrival_stable_s'))
         self._maximum_horizontal_setpoint_speed_mps = float(
             value('maximum_horizontal_setpoint_speed_mps')
+        )
+        self._horizontal_setpoint_max_accel_mps2 = float(
+            value('horizontal_setpoint_max_accel_mps2')
+        )
+        self._horizontal_slow_zone_m = float(
+            value('horizontal_slow_zone_m')
+        )
+        self._horizontal_min_approach_speed_mps = float(
+            value('horizontal_min_approach_speed_mps')
+        )
+        self._horizontal_target_snap_distance_m = float(
+            value('horizontal_target_snap_distance_m')
         )
         self._maximum_vertical_setpoint_speed_mps = float(
             value('maximum_vertical_setpoint_speed_mps')
@@ -340,6 +362,10 @@ class PanelDistanceMissionNode(Node):
             self._arrival_tolerance_m,
             self._arrival_stable_s,
             self._maximum_horizontal_setpoint_speed_mps,
+            self._horizontal_setpoint_max_accel_mps2,
+            self._horizontal_slow_zone_m,
+            self._horizontal_min_approach_speed_mps,
+            self._horizontal_target_snap_distance_m,
             self._maximum_vertical_setpoint_speed_mps,
             self._cruise_lidar_tolerance_m,
             self._cruise_lidar_gain,
@@ -378,6 +404,20 @@ class PanelDistanceMissionNode(Node):
             raise ValueError(
                 'launch_yaw_max_deviation_deg must be below 180'
             )
+        if (
+            self._horizontal_min_approach_speed_mps
+            > self._maximum_horizontal_setpoint_speed_mps
+        ):
+            raise ValueError(
+                'horizontal minimum approach speed exceeds maximum speed'
+            )
+        if (
+            self._horizontal_target_snap_distance_m
+            >= self._horizontal_slow_zone_m
+        ):
+            raise ValueError(
+                'horizontal target snap distance must be below slow zone'
+            )
 
     def _make_route(self) -> PanelRoute:
         return PanelRoute(
@@ -408,6 +448,7 @@ class PanelDistanceMissionNode(Node):
         self._arrival.reset()
         self._abort_land_requested = False
         self._command_xyz = None
+        self._reset_horizontal_setpoint_speed()
         self._distance_control_started_s = None
         self._distance_hold_started_s = None
         self._pause_started_s = None
@@ -859,6 +900,7 @@ class PanelDistanceMissionNode(Node):
             self._fail('local position unavailable at movement handover', True)
             return
         self._command_xyz = self._pose_xyz
+        self._reset_horizontal_setpoint_speed()
         self._last_setpoint_s = time.monotonic()
         self._transition(PanelDistanceMissionState.MOVE_PRESTREAM)
 
@@ -1031,6 +1073,7 @@ class PanelDistanceMissionNode(Node):
         self._pause_started_s = None
         if self._pose_xyz is not None:
             self._command_xyz = self._pose_xyz
+            self._reset_horizontal_setpoint_speed()
             self._last_setpoint_s = time.monotonic()
         previous = self._fsm.state
         self._fsm.panel_pause_complete()
@@ -1128,6 +1171,11 @@ class PanelDistanceMissionNode(Node):
 
     # -- setpoint helpers (identical shape to panel_mission) ------------------
 
+    def _reset_horizontal_setpoint_speed(self) -> None:
+        """Reset and record the moving horizontal target speed."""
+        self._horizontal_setpoint_speed_mps = 0.0
+        self._horizontal_setpoint_speed_publisher.publish(Float32(data=0.0))
+
     def _target_xyz(self, waypoint: RelativeWaypoint):
         if self._launch_xyz is None or self._pose_xyz is None:
             raise RuntimeError('launch or local position unavailable')
@@ -1163,18 +1211,38 @@ class PanelDistanceMissionNode(Node):
             if self._pose_xyz is None:
                 raise RuntimeError('position unavailable for setpoint ramp')
             self._command_xyz = self._pose_xyz
+            self._reset_horizontal_setpoint_speed()
         dt_s = max(0.001, min(0.2, now_s - self._last_setpoint_s))
         self._last_setpoint_s = now_s
-        self._command_xyz = advance_position_setpoint(
-            self._command_xyz,
-            self._target_xyz(waypoint),
-            maximum_horizontal_speed_mps=(
-                self._maximum_horizontal_setpoint_speed_mps
-            ),
-            maximum_vertical_speed_mps=(
-                self._maximum_vertical_setpoint_speed_mps
-            ),
-            dt_s=dt_s,
+        self._command_xyz, self._horizontal_setpoint_speed_mps = (
+            advance_slowed_position_setpoint(
+                self._command_xyz,
+                self._target_xyz(waypoint),
+                (self._pose_xyz[0], self._pose_xyz[1]),
+                current_horizontal_speed_mps=(
+                    self._horizontal_setpoint_speed_mps
+                ),
+                maximum_horizontal_speed_mps=(
+                    self._maximum_horizontal_setpoint_speed_mps
+                ),
+                maximum_horizontal_accel_mps2=(
+                    self._horizontal_setpoint_max_accel_mps2
+                ),
+                horizontal_slow_zone_m=self._horizontal_slow_zone_m,
+                minimum_approach_speed_mps=(
+                    self._horizontal_min_approach_speed_mps
+                ),
+                target_snap_distance_m=(
+                    self._horizontal_target_snap_distance_m
+                ),
+                maximum_vertical_speed_mps=(
+                    self._maximum_vertical_setpoint_speed_mps
+                ),
+                dt_s=dt_s,
+            )
+        )
+        self._horizontal_setpoint_speed_publisher.publish(
+            Float32(data=self._horizontal_setpoint_speed_mps)
         )
 
     def _publish_command_setpoint(self) -> None:

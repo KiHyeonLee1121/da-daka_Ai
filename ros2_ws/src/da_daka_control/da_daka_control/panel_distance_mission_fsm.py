@@ -6,12 +6,109 @@ import math
 from typing import Deque, Optional
 
 from da_daka_control.panel_mission_fsm import (  # noqa: F401 (re-exported)
-    advance_position_setpoint,
     control_ownership_failures,
     PanelRoute,
     RelativeWaypoint,
     StableArrival,
 )
+
+
+def advance_slowed_position_setpoint(
+    current_xyz: tuple[float, float, float],
+    target_xyz: tuple[float, float, float],
+    actual_xy: tuple[float, float],
+    *,
+    current_horizontal_speed_mps: float,
+    maximum_horizontal_speed_mps: float,
+    maximum_horizontal_accel_mps2: float,
+    horizontal_slow_zone_m: float,
+    minimum_approach_speed_mps: float,
+    target_snap_distance_m: float,
+    maximum_vertical_speed_mps: float,
+    dt_s: float,
+) -> tuple[tuple[float, float, float], float]:
+    """Advance a position target with acceleration and terminal slowdown."""
+    values = (
+        *current_xyz,
+        *target_xyz,
+        *actual_xy,
+        current_horizontal_speed_mps,
+        maximum_horizontal_speed_mps,
+        maximum_horizontal_accel_mps2,
+        horizontal_slow_zone_m,
+        minimum_approach_speed_mps,
+        target_snap_distance_m,
+        maximum_vertical_speed_mps,
+        dt_s,
+    )
+    if not all(math.isfinite(item) for item in values):
+        raise ValueError('slowed position setpoint inputs must be finite')
+    if current_horizontal_speed_mps < 0.0:
+        raise ValueError('current_horizontal_speed_mps cannot be negative')
+    positive = (
+        maximum_horizontal_speed_mps,
+        maximum_horizontal_accel_mps2,
+        horizontal_slow_zone_m,
+        minimum_approach_speed_mps,
+        target_snap_distance_m,
+        maximum_vertical_speed_mps,
+        dt_s,
+    )
+    if any(item <= 0.0 for item in positive):
+        raise ValueError('slowed setpoint limits must be positive')
+    if minimum_approach_speed_mps > maximum_horizontal_speed_mps:
+        raise ValueError('minimum approach speed cannot exceed maximum speed')
+    if target_snap_distance_m >= horizontal_slow_zone_m:
+        raise ValueError('target snap distance must be below slow zone')
+
+    command_dx = target_xyz[0] - current_xyz[0]
+    command_dy = target_xyz[1] - current_xyz[1]
+    command_remaining_m = math.hypot(command_dx, command_dy)
+    actual_remaining_m = math.hypot(
+        target_xyz[0] - actual_xy[0],
+        target_xyz[1] - actual_xy[1],
+    )
+    if command_remaining_m <= target_snap_distance_m:
+        next_x = target_xyz[0]
+        next_y = target_xyz[1]
+        next_horizontal_speed_mps = 0.0
+    else:
+        # Slow down as soon as either the moving command or the aircraft
+        # enters the terminal zone. The command-distance term prevents the
+        # moving target from reaching the waypoint at cruise speed while the
+        # aircraft still carries momentum behind it.
+        profile_remaining_m = min(command_remaining_m, actual_remaining_m)
+        desired_speed_mps = maximum_horizontal_speed_mps * min(
+            1.0,
+            profile_remaining_m / horizontal_slow_zone_m,
+        )
+        desired_speed_mps = max(
+            minimum_approach_speed_mps,
+            desired_speed_mps,
+        )
+        maximum_speed_change_mps = maximum_horizontal_accel_mps2 * dt_s
+        next_horizontal_speed_mps = max(
+            current_horizontal_speed_mps - maximum_speed_change_mps,
+            min(
+                current_horizontal_speed_mps + maximum_speed_change_mps,
+                desired_speed_mps,
+            ),
+        )
+        horizontal_step_m = min(
+            command_remaining_m,
+            next_horizontal_speed_mps * dt_s,
+        )
+        scale = horizontal_step_m / command_remaining_m
+        next_x = current_xyz[0] + command_dx * scale
+        next_y = current_xyz[1] + command_dy * scale
+
+    vertical_step_m = maximum_vertical_speed_mps * dt_s
+    vertical_error_m = target_xyz[2] - current_xyz[2]
+    next_z = current_xyz[2] + max(
+        -vertical_step_m,
+        min(vertical_step_m, vertical_error_m),
+    )
+    return (next_x, next_y, next_z), next_horizontal_speed_mps
 
 
 def body_offset_to_enu(
