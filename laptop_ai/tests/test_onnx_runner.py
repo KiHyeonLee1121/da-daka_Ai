@@ -12,10 +12,15 @@ from laptop_ai.onnx_runner import (
 
 class FakeValue:
     def __init__(self, array) -> None:
-        self.array = np.asarray(array)
+        self.array = np.asarray(array).copy()
+        self.update_count = 0
 
     def numpy(self):
         return self.array.copy()
+
+    def update_inplace(self, array) -> None:
+        self.array[...] = np.asarray(array)
+        self.update_count += 1
 
 
 class FakeOrtValue:
@@ -28,8 +33,17 @@ class FakeOrtValue:
         return FakeValue(np.zeros(shape, dtype=dtype))
 
 
+class FakeRunOptions:
+    def __init__(self) -> None:
+        self.entries = {}
+
+    def add_run_config_entry(self, key, value) -> None:
+        self.entries[key] = value
+
+
 class FakeOrt:
     OrtValue = FakeOrtValue
+    RunOptions = FakeRunOptions
 
 
 class FakeBinding:
@@ -70,6 +84,8 @@ class FakeSession:
         )
         self.standard_runs = 0
         self.binding_runs = 0
+        self.last_binding = None
+        self.last_run_options = None
 
     def get_inputs(self):
         return [self.input]
@@ -78,14 +94,17 @@ class FakeSession:
         return [self.output]
 
     def io_binding(self):
-        return FakeBinding()
+        binding = FakeBinding()
+        self.last_binding = binding
+        return binding
 
     def run(self, _outputs, _inputs):
         self.standard_runs += 1
         return [np.zeros((1, 6), dtype=np.float32)]
 
-    def run_with_iobinding(self, _binding):
+    def run_with_iobinding(self, _binding, run_options=None):
         self.binding_runs += 1
+        self.last_run_options = run_options
 
 
 def test_tensor_helpers_validate_type_and_shape() -> None:
@@ -112,6 +131,26 @@ def test_fixed_output_binding_reuses_device_output() -> None:
     assert session.standard_runs == 0
 
 
+def test_cuda_fixed_shape_reuses_input_and_enables_graph() -> None:
+    session = FakeSession([1, 6])
+    runner = OnnxInferenceRunner(
+        FakeOrt,
+        session,
+        selected_provider="CUDAExecutionProvider",
+        device_id=0,
+        use_io_binding=True,
+        enable_cuda_graph=True,
+    )
+    tensor = np.ones((1, 3, 2, 2), dtype=np.float32)
+    outputs = runner.run(tensor)
+    assert runner.io_binding_mode == "fixed-input-output"
+    assert runner.cuda_graph_enabled
+    assert outputs[0].shape == (1, 6)
+    assert session.binding_runs == 1
+    assert session.last_binding.input.update_count == 1
+    assert session.last_run_options.entries["gpu_graph_id"] == "0"
+
+
 def test_dynamic_output_binding_uses_runtime_allocated_output() -> None:
     session = FakeSession(["detections", 6])
     runner = OnnxInferenceRunner(
@@ -125,6 +164,21 @@ def test_dynamic_output_binding_uses_runtime_allocated_output() -> None:
     assert runner.io_binding_mode == "dynamic-output"
     assert outputs[0].shape == (1, 6)
     assert session.binding_runs == 1
+
+
+def test_runner_rejects_shape_or_dtype_changes() -> None:
+    session = FakeSession([1, 6])
+    runner = OnnxInferenceRunner(
+        FakeOrt,
+        session,
+        selected_provider="CUDAExecutionProvider",
+        device_id=0,
+        use_io_binding=True,
+    )
+    with pytest.raises(ValueError, match="shape mismatch"):
+        runner.run(np.zeros((1, 3, 3, 3), dtype=np.float32))
+    with pytest.raises(ValueError, match="dtype mismatch"):
+        runner.run(np.zeros((1, 3, 2, 2), dtype=np.float16))
 
 
 def test_cpu_runner_uses_standard_session_run() -> None:
