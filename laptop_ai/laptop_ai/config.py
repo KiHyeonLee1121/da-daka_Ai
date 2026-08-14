@@ -28,6 +28,7 @@ class DetectorConfig:
     confidence_threshold: float = 0.5
     model_path: str | None = None
     execution_provider: str = "auto"
+    require_gpu: bool = False
     input_width: int = 640
     input_height: int = 640
     class_id: int = 0
@@ -80,6 +81,11 @@ class PerformanceConfig:
     onnx_use_io_binding: bool = True
     onnx_cuda_conv_use_max_workspace: bool = True
     onnx_cuda_prefer_nhwc: bool = False
+    onnx_cuda_enable_graph: bool = False
+    onnx_cuda_use_tf32: bool = True
+    onnx_cuda_arena_extend_strategy: str = "kNextPowerOfTwo"
+    onnx_cuda_cudnn_conv_algo_search: str = "EXHAUSTIVE"
+    cuda_module_loading_lazy: bool = False
     onnx_tensorrt_fp16: bool = True
     onnx_tensorrt_engine_cache: bool = True
     onnx_tensorrt_timing_cache: bool = True
@@ -180,6 +186,8 @@ def _validate(
             "detector.execution_provider must be auto, cpu, cuda, tensorrt, "
             "or directml"
         )
+    if detector.require_gpu and detector.backend != "onnx":
+        raise ValueError("detector.require_gpu requires detector.backend=onnx")
     if not 0.0 <= detector.confidence_threshold <= 1.0:
         raise ValueError("detector.confidence_threshold must be within [0, 1]")
     if min(detector.input_width, detector.input_height) < 1:
@@ -217,6 +225,23 @@ def _validate(
         or performance.onnx_warmup_runs < 0
     ):
         raise ValueError("performance.onnx_warmup_runs must be a non-negative integer")
+    if performance.onnx_cuda_arena_extend_strategy not in {
+        "kNextPowerOfTwo",
+        "kSameAsRequested",
+    }:
+        raise ValueError(
+            "performance.onnx_cuda_arena_extend_strategy must be "
+            "kNextPowerOfTwo or kSameAsRequested"
+        )
+    if performance.onnx_cuda_cudnn_conv_algo_search not in {
+        "EXHAUSTIVE",
+        "HEURISTIC",
+        "DEFAULT",
+    }:
+        raise ValueError(
+            "performance.onnx_cuda_cudnn_conv_algo_search must be "
+            "EXHAUSTIVE, HEURISTIC, or DEFAULT"
+        )
     if not isinstance(performance.onnx_tensorrt_cache_path, str) or not (
         performance.onnx_tensorrt_cache_path.strip()
     ):
