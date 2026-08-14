@@ -40,6 +40,11 @@ setup(
             'tf_luna_serial = da_daka_control.tf_luna_serial:main',
             'mission_manager = da_daka_control.mission_manager_node:main',
             'ai_result_receiver = da_daka_control.ai_result_receiver:main',
+            'visual_servo = da_daka_control.visual_servo_node:main',
+            'control_command_mixer = '
+            'da_daka_control.control_command_mixer:main',
+            'spray_controller = da_daka_control.spray_controller_node:main',
+            'cleaning_coordinator = da_daka_control.cleaning_coordinator:main',
         ],
     },
 )
