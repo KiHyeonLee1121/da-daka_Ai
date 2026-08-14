@@ -1,197 +1,169 @@
 # DA-DAKA Laptop AI — Primary Inference Path
 
-Windows 또는 Linux 노트북에서 Raspberry Pi 영상 스트림을 받아 오염 검출만
-수행하고, 작은 UDP JSON 결과를 Pi로 돌려보내는 일반 Python 프로그램이다.
-Pixhawk, MAVLink, MAVROS, Mission Manager 또는 분사 장치에 연결하지 않는다.
-`codex/laptop-ai-inference` 브랜치에서는 이 프로그램이 기본 AI 실행 경로이며
-AI HAT+/Hailo 코드는 사용하지 않는다.
+Raspberry Pi 영상 스트림을 Linux 노트북에서 받아 오염 검출만 수행하고, 작은
+UDP JSON 결과를 Pi로 돌려보내는 AI 프로세스다. Pixhawk, MAVLink, MAVROS,
+Mission Manager 또는 분사 장치에 연결하지 않는다.
 
-## 설치와 실행
+현재 production target은 **Linux + NVIDIA GeForce RTX 5060 계열 GPU**다.
+`config/laptop_ai.yaml`이 이 환경의 기본 프로파일이며, CPU/OpenCV 개발만 할
+때는 `config/opencv_dev.yaml`을 사용한다.
 
-Linux/macOS 계열:
+## Linux NVIDIA 설치와 실행
 
 ```bash
 cd laptop_ai
-python -m venv .venv
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-nvidia-linux.txt
+python -m laptop_ai.nvidia_check
+python -m laptop_ai.main --config config/laptop_ai.yaml
+```
+
+기본 production config는 `detector.backend=onnx`,
+`execution_provider=cuda`, `require_gpu=true`다. CUDA provider가 없으면 CPU로
+조용히 fallback하지 않고 시작을 실패시킨다. 실제 dirt detector FP16 ONNX
+파일은 `models/dirt_detector.fp16.onnx`에 별도로 배치한다.
+
+NVIDIA/TensorRT 세부 튜닝과 검증 절차는
+[`../docs/linux_rtx5060_gpu.md`](../docs/linux_rtx5060_gpu.md)를 참고한다.
+
+## 개발용 OpenCV 경로
+
+실제 ONNX 모델이 아직 준비되지 않았거나 CPU-only 개발을 할 때만 다음처럼
+실행한다.
+
+```bash
+cd laptop_ai
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m laptop_ai.main --config config/laptop_ai.yaml
+python -m laptop_ai.main --config config/opencv_dev.yaml
 ```
 
-Windows PowerShell:
-
-```powershell
-cd laptop_ai
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-# CPU runtime
-python -m pip install -r requirements.txt
-python -m laptop_ai.main --config config/laptop_ai.yaml
-```
-
-Windows에서 AMD/Intel/NVIDIA DirectX 12 GPU를 DirectML로 사용할 때는 CPU용
-`onnxruntime` 대신 DirectML 배포판을 설치한다. 두 ONNX Runtime 배포판을
-같은 가상환경에 함께 설치하지 않는다.
-
-```powershell
-cd laptop_ai
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-directml.txt
-python -m laptop_ai.main --config config/laptop_ai.yaml
-```
-
-NVIDIA CUDA/TensorRT 환경은 `requirements-cuda.txt`를 사용한다. TensorRT
-라이브러리까지 설치되어 provider가 노출되면 `auto`가 TensorRT를 먼저 쓰고,
-지원하지 않는 subgraph는 CUDA와 CPU 순으로 처리한다.
-
-종료는 `Ctrl+C`, 디버그 창에서는 `q`를 사용한다. 종료 시 영상 캡처,
-UDP socket과 선택적 영상 writer를 정리한다.
+이 개발 경로는 production GPU 성능을 대표하지 않는다.
 
 ## 영상 입력
 
-`config/laptop_ai.yaml`의 `video.source`는 다음을 받을 수 있다.
-
-- RTSP URL: `rtsp://192.168.0.20:8554/camera`
-- HTTP MJPEG URL: `http://192.168.0.20:8080/video`
-- GStreamer pipeline 문자열: 이때 `video.backend: gstreamer`
-- 로컬 웹캠 번호: `0`
-- 로컬 영상 파일 경로
-
-수신 thread는 큐 대신 한 개의 최신 프레임 슬롯만 유지한다. 추론이 느리면
-처리하지 못한 예전 프레임을 버리고 최신 프레임으로 교체한다. 연결이
-`max_consecutive_failures`번 연속 실패하면 capture를 닫고
-`reconnect_interval_s` 후 다시 연결한다. 네트워크 단절 중에는 새 결과가
-생성되지 않으므로 Pi의 heartbeat timeout이 AI를 unhealthy로 전환한다.
-
-카메라는 Pi의 stream producer 한 프로세스만 열어야 한다. 루트 `main.py`와
-별도 stream server가 같은 카메라를 동시에 열지 않도록 한다.
-
-HTTP MJPEG는 설정이 간단하지만 매 프레임 JPEG 압축/해제와 TCP buffering이
-추가된다. 실제 장비에서 지연이 중요하면 Pi에서 H.264 RTP/UDP를 송신하고
-노트북 OpenCV가 다음과 같은 GStreamer pipeline을 읽도록 구성한다. Windows의
-GStreamer 설치와 `avdec_h264` plugin 제공 여부는 장비에서 먼저 확인한다.
+기본 production profile은 Pi의 H.264 RTP/UDP stream을 GStreamer로 받는다.
+수신 thread는 큐 대신 최신 프레임 한 장만 유지한다. 추론이 느리면 처리하지
+못한 오래된 프레임을 버리며, `max_frame_age_s`를 넘은 프레임은 추론하지
+않는다.
 
 ```yaml
 video:
   backend: gstreamer
   source: "udpsrc port=5600 caps=application/x-rtp,media=video,encoding-name=H264,payload=96 ! rtpjitterbuffer latency=20 drop-on-latency=true ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1 sync=false"
   capture_buffer_size: 1
+  max_frame_age_s: 0.35
 ```
 
-RTP/UDP는 손실 시 화질 저하가 생길 수 있으므로 유선 LAN을 우선하고, 실제 Pi
-송신기·카메라가 연결된 상태에서 packet loss와 capture-to-send 지연을 측정한다.
+RTSP, HTTP MJPEG, local webcam과 local video file도 `VideoReceiver`가 받을 수
+있지만 실제 비행 지연 검증은 production H.264 경로에서 다시 측정한다.
+카메라는 Pi의 stream producer 한 프로세스만 열어야 한다.
 
-## 검출 backend
+## ONNX GPU 경로
 
-OpenCV MVP:
+현재 detector contract는 첫 output tensor가
+`[x1, y1, x2, y2, score, class_id]` 행 구조인 모델이다. 일반 YOLO raw output을
+그대로 사용할 수 없으며 export 단계에서 NMS를 포함시키거나 모델별
+postprocess를 추가해야 한다.
 
-```yaml
-detector:
-  backend: opencv
-  confidence_threshold: 0.5
-```
-
-기존 `vision/opencv_dirt_detector.py`와 같은 grayscale, threshold,
-morphology, contour, 반사 하이라이트 제거 방식을 노트북 프로세스 경계에
-맞게 적용한다.
-
-ONNX Runtime:
+production 설정의 핵심:
 
 ```yaml
 detector:
   backend: onnx
-  model_path: models/dirt_detector.onnx
-  execution_provider: auto  # auto, cpu, tensorrt, cuda, directml
+  model_path: models/dirt_detector.fp16.onnx
+  execution_provider: cuda
+  require_gpu: true
   input_width: 640
   input_height: 640
-  class_id: 0
-  output_format: xyxy_score_class
-  coordinates_normalized: false
-```
 
-모델 파일은 저장소에 포함하지 않는다. 경로가 없으면 시작 단계에서 명확한
-오류를 출력한다. `auto`는 TensorRT, CUDA, DirectML, CPU 순서로 사용 가능한
-provider를 고르고, 명시적으로 요청한 GPU provider가 없을 때도 안전하게
-fallback한다.
-시작 로그에서 실제 선택된 provider와 device ID를 확인할 수 있다. 현재 후처리는 출력 첫 tensor가
-`[x1, y1, x2, y2, score, class_id]` 행인 모델만 지원한다. 다른 모델은
-`laptop_ai/onnx_postprocess.py`를 수정해야 하며, 지원하지 않는 출력 구조를
-자동으로 처리한다고 가정하지 않는다.
-
-## 노트북 성능 설정
-
-`performance` 설정은 코드 수정 없이 노트북에 맞춰 추론 runtime을 조정한다.
-
-```yaml
 performance:
-  opencv_num_threads: 12      # 이 PC의 logical CPU 수; 다른 PC는 다시 측정
-  opencv_use_opencl: false
-  opencv_use_optimized: true
-  onnx_intra_op_threads: 12
-  onnx_inter_op_threads: 0
+  opencv_num_threads: 2
+  onnx_intra_op_threads: 1
+  onnx_inter_op_threads: 1
   onnx_execution_mode: sequential
   onnx_graph_optimization: all
-  onnx_enable_cpu_mem_arena: true
-  onnx_device_id: 0          # 기본 디스플레이 GPU는 보통 0
-  onnx_warmup_runs: 3
+  onnx_warmup_runs: 20
   onnx_use_io_binding: true
+  onnx_cuda_enable_graph: true
   onnx_cuda_conv_use_max_workspace: true
+  onnx_cuda_cudnn_conv_algo_search: EXHAUSTIVE
+  onnx_cuda_arena_extend_strategy: kNextPowerOfTwo
+  onnx_cuda_use_tf32: true
   onnx_cuda_prefer_nhwc: false
-  onnx_tensorrt_fp16: true
-  onnx_tensorrt_engine_cache: true
-  onnx_tensorrt_timing_cache: true
-  onnx_tensorrt_cache_path: .runtime/onnx-tensorrt
+  cuda_module_loading_lazy: true
 ```
 
-CPU 노트북에서는 먼저 자동 thread, sequential execution, graph optimization
-`all`로 측정한다. 여러 모델/세션을 병렬 실행할 때만 inter-op 또는 parallel
-mode를 검토한다. CUDA를 사용할 때는 `onnxruntime-gpu`가 제공하는
-`CUDAExecutionProvider`가 실제로 표시되는지 시작 로그에서 확인한다.
-DirectML은 병렬 execution과 memory pattern을 지원하지 않으므로 코드가
-`ORT_SEQUENTIAL`과 `enable_mem_pattern=false`를 자동으로 강제한다. 멀티 GPU
-장비에서는 작업 관리자에서 adapter 순서를 확인한 뒤 `onnx_device_id`를 바꾼다.
-고정 출력 모델은 I/O binding으로 GPU 출력 메모리를 재사용한다. 동적 출력이거나
-해당 provider에서 binding을 지원하지 않으면 자동으로 동적 할당 또는
-`session.run` 경로로 내려간다. TensorRT engine/timing cache는 모델, ORT,
-TensorRT 또는 GPU가 바뀌면 지우고 다시 생성해야 한다.
+fixed-shape 모델에서는 `OnnxInferenceRunner`가 GPU input/output `OrtValue`를
+재사용하고, 매 프레임 input의 내용만 `update_inplace()`로 갱신한다. CUDA Graph
+사용 시 같은 device address를 유지해 graph replay가 가능하도록 한다.
 
-디버그 창과 영상 저장은 처리량을 낮출 수 있으므로 성능 측정 및 실제 운용
-시에는 둘 다 끄는 것을 권장한다. `process_every_n_frames`는 노트북이 실제로
-수신한 프레임 순서를 기준으로 적용된다.
+모델이 dynamic output이거나 CUDA Graph capture를 지원하지 않으면
+`onnx_cuda_enable_graph: false`로 비활성화하고 I/O binding만 유지해 벤치한다.
 
-고정 입력 크기의 ONNX 모델은 provider별 순수 추론 시간을 재현할 수 있다.
+## TensorRT
 
-```powershell
-python -m laptop_ai.benchmark_onnx --model models\dirt_detector.onnx --provider auto
-python -m laptop_ai.benchmark_onnx --model models\dirt_detector.onnx `
-  --provider auto --io-binding --input-image C:\path\to\frame.jpg
+TensorRT는 `auto`로 무조건 켜는 대신 실제 RTX 5060 장비와 실제 모델에서
+CUDA EP보다 빨라지는지 먼저 측정한 뒤 opt-in한다. TensorRT를 쓸 때는
+engine/timing cache를 사용하되 모델, GPU, TensorRT/ORT 버전 변경 시 cache를
+재생성한다.
+
+provider별 추론 벤치마크:
+
+```bash
+python -m laptop_ai.benchmark_onnx \
+  --model models/dirt_detector.fp16.onnx \
+  --provider cuda \
+  --io-binding
 ```
 
-AMD DirectML 또는 NVIDIA GPU에서 FP16을 검증하려면 도구 환경을 설치하고 별도
-모델을 만든다. 원본 파일을 덮어쓰지 않으며 I/O type은 기본적으로 FP32로
-유지한다.
+TensorRT 환경 검증 후:
 
-```powershell
+```bash
+python -m laptop_ai.benchmark_onnx \
+  --model models/dirt_detector.fp16.onnx \
+  --provider tensorrt \
+  --io-binding
+```
+
+최고 한 번의 결과가 아니라 warm-up 이후 median/p95와 capture-to-result
+latency를 비교한다.
+
+## FP16 모델
+
+원본 FP32 모델을 덮어쓰지 않고 별도 FP16 모델을 만든다.
+
+```bash
 python -m pip install -r requirements-tools.txt
-python -m laptop_ai.convert_onnx_fp16 `
-  --input models\dirt_detector.onnx `
-  --output models\dirt_detector.fp16.onnx
+python -m laptop_ai.convert_onnx_fp16 \
+  --input models/dirt_detector.onnx \
+  --output models/dirt_detector.fp16.onnx
 ```
 
-변환 모델은 실제 오염 검증 세트에서 precision/recall, bbox 오차와 threshold
-경계 사례를 통과한 뒤 `detector.model_path`에 지정한다. 샘플 YOLO 이미지의
-수치 일치는 실제 오염 모델의 정확도를 대신하지 않는다.
+FP16 모델은 실제 오염 validation set에서 FP32 대비 precision/recall,
+confidence threshold 경계, bbox 오차를 통과한 뒤 production path에 넣는다.
 
-RX 7600 DirectML과 CPU, AI HAT+ 13 TOPS 비교 및 MJPEG 링크별 하한은
-[`../docs/laptop_gpu_benchmark.md`](../docs/laptop_gpu_benchmark.md)에 기록한다.
+## Pendulum-inspired network/compute optimization
+
+이 브랜치에는 Pi-to-laptop video bitrate와 laptop DNN compute cost를 함께 보는
+Pendulum-inspired optimizer가 있다. 상세 구조는
+[`../docs/pendulum_optimization.md`](../docs/pendulum_optimization.md)를 참고한다.
+
+RTX 5060 marketing 성능 수치를 scheduler에 직접 넣지 않는다. 실제 light / medium /
+heavy detector 각각에 대해 production CUDA 또는 검증된 TensorRT 경로에서
+`inference_ms`와 accuracy를 측정하고, 그 값으로
+`{bitrate, inference_ms, accuracy}` demand curve를 만든다.
+
+현재 optimizer는 flight control과 분리되어 있으며 Pi encoder 제어 endpoint가
+아직 없으므로 기본 `observe` 모드다.
 
 ## UDP JSON
 
 모든 packet은 protocol version 1의 완전한 schema를 사용한다. 좌표와 bbox는
 `0.0..1.0` 정규화 값이며 JSON 생성 전 finite/range/bbox 경계를 검사한다.
-NaN과 Infinity는 전송하지 않는다. 원본 이미지와 segmentation mask도 UDP로
-전송하지 않는다.
+원본 이미지나 segmentation mask는 UDP로 보내지 않는다.
 
 ```json
 {
@@ -213,27 +185,26 @@ NaN과 Infinity는 전송하지 않는다. 원본 이미지와 segmentation mask
   "bbox_h_norm": 0.15,
   "area_ratio": 0.018,
   "confidence": 0.91,
-  "inference_time_ms": 38.2,
-  "model_name": "opencv-mvp",
+  "inference_time_ms": 8.2,
+  "model_name": "dirt_detector.fp16.onnx",
   "sequence": 18342
 }
 ```
 
-검출이 없을 때도 동일 schema를 보내되 모든 검출 좌표, 면적과 confidence는
-0이다. `heartbeat_interval_s`로 no-detection 전송률을 제한한다. 한 session의
-sequence는 packet마다 증가하고 같은 frame ID는 두 번 보내지 않는다.
+검출이 없을 때도 동일 schema를 보내되 검출 좌표, 면적과 confidence는 0이다.
+네트워크 단절 중에는 새 결과가 생기지 않으므로 Pi receiver의 heartbeat timeout이
+AI를 unhealthy로 전환한다.
 
 ## 로그와 테스트
 
-주기 요약 로그에는 영상 연결 상태, frame ID, 처리 FPS, 추론 시간,
-capture-to-send 추정 지연, 검출/confidence, UDP 성공·실패, 재접속과 dropped
-frame 수가 포함된다. 매 프레임 INFO 로그는 남기지 않는다.
+주기 summary에는 frame ID, 처리 FPS, inference time, capture-to-send 추정 지연,
+검출/confidence, UDP 성공/실패, 재접속과 dropped frame 수가 포함된다.
 
 ```bash
 cd laptop_ai
 python -m pytest tests
 ```
 
-실기체 연결 전에는 local video, UDP loopback, Pi receiver, SITL, 프로펠러 제거
-bench test 순으로 확인한다. 이 프로그램은 어떤 설정에서도 자동 Arm,
-Takeoff, PX4 mode 전환 또는 분사를 수행하지 않는다.
+실기체 연결 전에는 local video -> UDP loopback -> Pi receiver -> SITL ->
+프로펠러 제거 bench test 순으로 확인한다. 이 프로그램은 어떤 설정에서도
+자동 Arm, Takeoff, PX4 mode 전환 또는 분사를 수행하지 않는다.
