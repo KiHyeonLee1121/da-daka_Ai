@@ -2,7 +2,7 @@ cleaning_coordinator:
   ros__parameters:
     result_topic: /ai/detection_result
     health_topic: /ai/health
-    distance_target_topic: /distance_control/target_reached
+    distance_target_topic: /cleaning/target_reached
     visual_aligned_topic: /visual_servo/aligned
     visual_valid_topic: /visual_servo/target_valid
     velocity_topic: /mavros/local_position/velocity_local
