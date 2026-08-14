@@ -7,6 +7,8 @@ survey_reposition:
     target_frame_id: map
     maximum_target_age_s: 30.0
     telemetry_timeout_s: 0.5
+    # Capture while disarmed, then restore this heading before XY translation.
+    require_prearm_heading: true
 
     maximum_horizontal_displacement_m: 4.0
     maximum_horizontal_speed_mps: 0.20
@@ -17,7 +19,7 @@ survey_reposition:
 
     prestream_s: 2.0
     offboard_wait_timeout_s: 30.0
-    # Recover the yaw captured with the survey image before translating.
+    # Recover the operator-captured pre-arm heading before translating.
     yaw_alignment_tolerance_deg: 5.0
     yaw_alignment_stable_s: 0.5
     yaw_alignment_timeout_s: 10.0

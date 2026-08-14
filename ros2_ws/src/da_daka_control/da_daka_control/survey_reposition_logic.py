@@ -4,6 +4,45 @@ import math
 from typing import Optional
 
 
+class PrearmHeadingLatch:
+    """Keep one operator-captured yaw valid for exactly one arm cycle."""
+
+    def __init__(self) -> None:
+        """Create an empty latch with no observed MAVROS arm state."""
+        self.heading_rad: Optional[float] = None
+        self.valid_for_current_arm = False
+        self._state_received = False
+        self._armed = False
+
+    def capture(self, yaw_rad: float) -> None:
+        """Store a finite heading while the observed vehicle is disarmed."""
+        if not self._state_received:
+            raise ValueError('MAVROS arm state has not been received')
+        if self._armed:
+            raise ValueError('pre-arm heading can only be captured disarmed')
+        if not math.isfinite(yaw_rad):
+            raise ValueError('pre-arm heading must be finite')
+        self.heading_rad = wrapped_yaw_error(yaw_rad, 0.0)
+        self.valid_for_current_arm = False
+
+    def update_armed(self, armed: bool) -> None:
+        """Activate on an arm edge and clear after the matching disarm."""
+        armed = bool(armed)
+        if not self._state_received:
+            self._state_received = True
+            self._armed = armed
+            if armed:
+                self.heading_rad = None
+                self.valid_for_current_arm = False
+            return
+        if not self._armed and armed:
+            self.valid_for_current_arm = self.heading_rad is not None
+        elif self._armed and not armed:
+            self.heading_rad = None
+            self.valid_for_current_arm = False
+        self._armed = armed
+
+
 def wrapped_yaw_error(target_rad: float, current_rad: float) -> float:
     """Return the shortest signed yaw error in radians."""
     if not math.isfinite(target_rad) or not math.isfinite(current_rad):

@@ -1,4 +1,4 @@
-"""Move only in Local ENU XY while preserving capture altitude and yaw."""
+"""Move in Local ENU XY while restoring an operator-captured heading."""
 
 from enum import auto, Enum
 import math
@@ -7,6 +7,7 @@ from typing import Optional
 
 from da_daka_control.survey_reposition_logic import (
     advance_horizontal_setpoint,
+    PrearmHeadingLatch,
     StableHorizontalArrival,
     target_validation_failures,
     wrapped_yaw_error,
@@ -72,6 +73,11 @@ class SurveyRepositionNode(Node):
         )
         self.create_service(Trigger, '/survey/reposition/start', self._start)
         self.create_service(Trigger, '/survey/reposition/abort', self._abort)
+        self.create_service(
+            Trigger,
+            '/survey/reposition/capture_prearm_heading',
+            self._capture_prearm_heading,
+        )
         self.create_subscription(
             State, '/mavros/state', self._mavros_state, 10
         )
@@ -96,6 +102,7 @@ class SurveyRepositionNode(Node):
         self._connected = False
         self._armed = False
         self._mode = ''
+        self._prearm_heading = PrearmHeadingLatch()
         self._pose: Optional[PoseStamped] = None
         self._pose_time_s: Optional[float] = None
         self._velocity_xy: Optional[tuple[float, float]] = None
@@ -130,6 +137,7 @@ class SurveyRepositionNode(Node):
         self.declare_parameter('target_frame_id', 'map')
         self.declare_parameter('maximum_target_age_s', 30.0)
         self.declare_parameter('telemetry_timeout_s', 0.5)
+        self.declare_parameter('require_prearm_heading', True)
         self.declare_parameter('maximum_horizontal_displacement_m', 4.0)
         self.declare_parameter('maximum_horizontal_speed_mps', 0.20)
         self.declare_parameter('maximum_vertical_drift_m', 0.40)
@@ -152,6 +160,7 @@ class SurveyRepositionNode(Node):
         self._target_frame_id = str(value('target_frame_id'))
         self._maximum_target_age_s = float(value('maximum_target_age_s'))
         self._telemetry_timeout_s = float(value('telemetry_timeout_s'))
+        self._require_prearm_heading = bool(value('require_prearm_heading'))
         self._maximum_displacement_m = float(
             value('maximum_horizontal_displacement_m')
         )
@@ -202,9 +211,23 @@ class SurveyRepositionNode(Node):
             raise ValueError('yaw_alignment_tolerance_deg must be below 180')
 
     def _mavros_state(self, msg: State) -> None:
+        was_valid = self._prearm_heading.valid_for_current_arm
+        previous_heading = self._prearm_heading.heading_rad
+        self._prearm_heading.update_armed(msg.armed)
         self._connected = msg.connected
         self._armed = msg.armed
         self._mode = msg.mode
+        if (
+            not was_valid
+            and self._prearm_heading.valid_for_current_arm
+            and self._prearm_heading.heading_rad is not None
+        ):
+            self.get_logger().info(
+                'Pre-arm heading activated for this arm cycle: '
+                f'{math.degrees(self._prearm_heading.heading_rad):.1f} deg'
+            )
+        elif previous_heading is not None and self._prearm_heading.heading_rad is None:
+            self.get_logger().info('Pre-arm heading cleared after disarm')
 
     def _pose_callback(self, msg: PoseStamped) -> None:
         yaw_rad = self._yaw_from_quaternion(msg.pose.orientation)
@@ -242,6 +265,41 @@ class SurveyRepositionNode(Node):
         self._target_yaw_rad = target_yaw_rad
         self._target_time_s = time.monotonic()
 
+    def _capture_prearm_heading(self, _request, response):
+        now_s = time.monotonic()
+        if not self._connected:
+            response.success = False
+            response.message = 'MAVROS is not connected'
+            return response
+        if self._armed:
+            response.success = False
+            response.message = 'vehicle must be disarmed'
+            return response
+        if self._state in self.ACTIVE_STATES:
+            response.success = False
+            response.message = f'already active in {self._state.name}'
+            return response
+        if not self._pose_fresh(now_s) or self._current_yaw_rad is None:
+            response.success = False
+            response.message = 'local pose/yaw is stale'
+            return response
+        try:
+            self._prearm_heading.capture(self._current_yaw_rad)
+        except ValueError as error:
+            response.success = False
+            response.message = str(error)
+            return response
+        heading_deg = math.degrees(self._prearm_heading.heading_rad)
+        response.success = True
+        response.message = (
+            f'pre-arm heading captured: {heading_deg:.1f} deg; '
+            'arm without restarting this node'
+        )
+        self._publish_result(
+            f'PREARM_HEADING_CAPTURED yaw_deg={heading_deg:.1f}'
+        )
+        return response
+
     def _start(self, _request, response):
         now_s = time.monotonic()
         failures = self._start_failures(now_s)
@@ -252,7 +310,7 @@ class SurveyRepositionNode(Node):
         position = self._pose.pose.position
         self._hold_z = position.z
         self._command_xy = (position.x, position.y)
-        self._command_yaw_rad = self._target_yaw_rad
+        self._command_yaw_rad = self._alignment_yaw_rad()
         self._initial_mode = self._mode
         self._arrival.reset()
         self._yaw_aligned_since_s = None
@@ -261,7 +319,7 @@ class SurveyRepositionNode(Node):
         )
         response.success = True
         response.message = (
-            'holding current Z/XY and commanding survey yaw; after '
+            'holding current Z/XY and commanding pre-arm heading; after '
             'prestream, operator may select OFFBOARD in QGC'
         )
         return response
@@ -297,6 +355,13 @@ class SurveyRepositionNode(Node):
             failures.append('MAVROS is not connected')
         if not self._armed:
             failures.append('vehicle is not armed')
+        if (
+            self._require_prearm_heading
+            and not self._prearm_heading.valid_for_current_arm
+        ):
+            failures.append(
+                'pre-arm heading was not captured for this arm cycle'
+            )
         if self._mode == 'OFFBOARD':
             failures.append('start before entering OFFBOARD')
         if not self._telemetry_fresh(now_s):
@@ -332,6 +397,17 @@ class SurveyRepositionNode(Node):
                 f'velocity setpoint publisher conflict ({velocity_publishers})'
             )
         return failures
+
+    def _alignment_yaw_rad(self) -> Optional[float]:
+        if self._require_prearm_heading:
+            return self._prearm_heading.heading_rad
+        return self._target_yaw_rad
+
+    def _pose_fresh(self, now_s: float) -> bool:
+        return (
+            self._pose_time_s is not None
+            and now_s - self._pose_time_s <= self._telemetry_timeout_s
+        )
 
     def _telemetry_fresh(self, now_s: float) -> bool:
         return (
@@ -404,7 +480,7 @@ class SurveyRepositionNode(Node):
                     else RepositionState.WAIT_OFFBOARD
                 )
                 reason = (
-                    'OFFBOARD confirmed; aligning survey yaw'
+                    'OFFBOARD confirmed; aligning pre-arm heading'
                     if next_state == RepositionState.ALIGN_YAW
                     else 'waiting for operator to select OFFBOARD in QGC'
                 )
@@ -416,7 +492,7 @@ class SurveyRepositionNode(Node):
                 self._yaw_aligned_since_s = None
                 self._transition(
                     RepositionState.ALIGN_YAW,
-                    'OFFBOARD confirmed; aligning survey yaw',
+                    'OFFBOARD confirmed; aligning pre-arm heading',
                 )
                 return
             if self._mode != self._initial_mode:
@@ -436,7 +512,7 @@ class SurveyRepositionNode(Node):
         if self._state == RepositionState.ALIGN_YAW:
             self._publish_setpoint()
             yaw_error_rad = abs(wrapped_yaw_error(
-                self._target_yaw_rad,
+                self._command_yaw_rad,
                 self._current_yaw_rad,
             ))
             if yaw_error_rad > self._yaw_alignment_tolerance_rad:
@@ -450,7 +526,7 @@ class SurveyRepositionNode(Node):
                 self._arrival.reset()
                 self._transition(
                     RepositionState.MOVE,
-                    f'survey yaw aligned; error '
+                    f'pre-arm heading aligned; error '
                     f'{math.degrees(yaw_error_rad):.1f} deg',
                 )
                 return

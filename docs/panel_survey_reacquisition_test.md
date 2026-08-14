@@ -81,7 +81,9 @@ from the panel square-route mission, but is deliberately narrower:
 
 - only X and Y from `/survey/panel_target_local` are used;
 - current Local Z is latched when `/survey/reposition/start` is called;
-- the survey-capture yaw is commanded first, and XY translation begins only
+- `/survey/reposition/capture_prearm_heading` stores the physical heading while
+  the vehicle is disarmed, before the operator arms;
+- the stored pre-arm heading is commanded first, and XY translation begins only
   after yaw remains within 5 degrees for 0.5 seconds;
 - it never arms, disarms, takes off, lands, or requests a PX4 mode;
 - after hold-setpoint prestream, the QGC operator must select OFFBOARD;
@@ -91,6 +93,17 @@ from the panel square-route mission, but is deliberately narrower:
 
 The checked-in configuration remains disabled with
 `configuration_approved: false`. Enabling it is a per-test operator decision.
+Launch the node before Arm, call the pre-arm heading service while local pose is
+fresh, and do not restart the node between heading capture and the matching Arm.
+The reference becomes valid on that Arm transition and is automatically erased
+on Disarm. A node started after Arm cannot invent a pre-arm reference and refuses
+the reposition start request.
+
+```bash
+ros2 service call /survey/reposition/capture_prearm_heading \
+  std_srvs/srv/Trigger '{}'
+```
+
 While the node reports `TARGET_HOLD`, leave OFFBOARD before using the normal
 altitude controller for the low-altitude verification step.
 
@@ -103,7 +116,10 @@ ros2 launch da_daka_control survey_reposition.launch.py \
 
 ## Recommended test run
 
-First hover near a TF-Luna ground distance of 3 m with small roll/pitch. Then:
+Before Arm, launch the approved reposition node and capture the current heading
+with the service above. Keep that node running, then let the QGC operator Arm,
+take off, and hover near a TF-Luna ground distance of 3 m with small roll/pitch.
+After the hover safety checks, run:
 
 ```bash
 python3 tools/panel_reacquisition_test.py --interactive

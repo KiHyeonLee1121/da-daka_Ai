@@ -72,22 +72,44 @@ udp-b://10.42.0.1:14555@:14550
 
 1. 현재 서비스/컨테이너/MAVROS/TF-Luna 상태 확인
 2. setpoint publisher 0개 확인
-3. 사용자가 QGC로 3m 안정 hover 수행
-4. 새 180도 정규화 burst 촬영 및 자동 패널 검출
-5. drift 게이트와 원본 육안 확인
-6. 새 target 계산 및 보고
-7. operator-gated reposition 준비
-8. 요청 시에만 QGC에서 OFFBOARD 전환
-9. 3m 유지 XY 이동 후 기존 거리 제어로 약 1m 하강
-10. 저고도 재촬영 및 재포착 판정
+3. Disarm 상태에서 reposition 노드 실행 및 pre-arm heading 저장
+4. 저장된 yaw 각도를 operator에게 보고
+5. 사용자가 QGC로 Arm, 이륙, 3m 안정 hover 수행
+6. 새 180도 정규화 burst 촬영 및 자동 패널 검출
+7. drift 게이트와 원본 육안 확인
+8. 새 target 계산 및 보고
+9. reposition start 후 pre-arm heading을 먼저 복원
+10. 요청 시에만 QGC에서 OFFBOARD 전환
+11. heading 오차 5도 이내 안정 확인 후 3m 유지 XY 이동
+12. 기존 거리 제어로 약 1m 하강
+13. 저고도 재촬영 및 재포착 판정
 
 target의 Z/U 값을 직접 하강 명령에 사용하지 않는다. 이전 비행 target은 모두
 stale이며 다음 비행에 재사용하지 않는다.
 
+## Pre-arm heading 복원
+
+직전 비행에서 기체가 Arm 전 방향보다 반시계 방향으로 약 20도 돌아간 상태로
+호버한 것이 육안으로 확인됐다. 카메라 offset으로 보정하지 않고 기체 yaw 제어에서
+처리한다. `survey_reposition`은 Arm 전에 다음 서비스를 호출해 현재 MAVROS Local ENU
+yaw를 저장한다.
+
+```bash
+ros2 service call /survey/reposition/capture_prearm_heading \
+  std_srvs/srv/Trigger '{}'
+```
+
+저장값은 바로 유효해지지 않고 다음 Arm 전환에서만 활성화된다. 3m hover 후
+reposition을 시작하면 현재 XY/Z를 유지하면서 이 pre-arm heading으로 먼저 회전하고,
+오차 5도 이내가 0.5초 유지된 뒤에만 XY 이동한다. Disarm 시 저장값은 자동 삭제된다.
+노드를 Arm 후 시작하거나 기준값을 저장하지 않은 경우 start를 거부한다.
+
 ## 검증 결과
 
 - DA-DAKA 카메라 180도 회전/yaw 이중 보정 방지/파란 패널 fallback: 3 tests passed
-- survey geometry 및 reposition 순수 로직: 11 tests passed
+- survey geometry 및 reposition 순수 로직: 14 tests passed
 - `da_daka_control` package build 성공
+- 지상 통합 시험에서 pre-arm heading service가 당시 yaw `-26.4deg`를 저장하고
+  노드는 IDLE/setpoint 미발행 상태를 유지함을 확인
 - 전체 저장소 lint는 기존 무관한 style error가 많아 실패하며 이번 변경 파일과
   분리해서 관리해야 한다.

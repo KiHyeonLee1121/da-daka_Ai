@@ -4,6 +4,7 @@ import math
 
 from da_daka_control.survey_reposition_logic import (
     advance_horizontal_setpoint,
+    PrearmHeadingLatch,
     StableHorizontalArrival,
     target_validation_failures,
     wrapped_yaw_error,
@@ -70,3 +71,35 @@ def test_wrapped_yaw_error_crosses_pi_boundary() -> None:
     """Yaw alignment must use the short path across plus/minus pi."""
     error = wrapped_yaw_error(math.radians(-179), math.radians(179))
     assert math.degrees(error) == pytest.approx(2.0)
+
+
+def test_prearm_heading_is_valid_for_exactly_one_arm_cycle() -> None:
+    """A captured disarmed heading must activate on arm and clear on disarm."""
+    latch = PrearmHeadingLatch()
+    latch.update_armed(False)
+    latch.capture(math.radians(25.0))
+    assert not latch.valid_for_current_arm
+
+    latch.update_armed(True)
+    assert latch.valid_for_current_arm
+    assert math.degrees(latch.heading_rad) == pytest.approx(25.0)
+
+    latch.update_armed(False)
+    assert not latch.valid_for_current_arm
+    assert latch.heading_rad is None
+
+
+def test_prearm_heading_cannot_be_captured_while_armed() -> None:
+    """Capturing after Arm must fail instead of accepting a flight yaw."""
+    latch = PrearmHeadingLatch()
+    latch.update_armed(True)
+    with pytest.raises(ValueError, match='disarmed'):
+        latch.capture(0.0)
+
+
+def test_node_started_armed_has_no_prearm_reference() -> None:
+    """Starting the node after Arm must not invent a pre-arm heading."""
+    latch = PrearmHeadingLatch()
+    latch.update_armed(True)
+    assert not latch.valid_for_current_arm
+    assert latch.heading_rad is None
