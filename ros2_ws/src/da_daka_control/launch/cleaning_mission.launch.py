@@ -77,15 +77,15 @@ def generate_launch_description() -> LaunchDescription:
                 output='screen',
                 parameters=[
                     config('distance_mission.yaml'),
-                    # Combined target already includes long LiDAR settling plus
-                    # current visual alignment. Keep OFFBOARD alive for the final
-                    # stop verification and spray RPC.
-                    {'target_hold_confirm_duration': 1.5, 'target_hold_timeout': 4.0},
+                    # Once spray succeeds, hold the final stopped state briefly
+                    # before handing back to the normal loiter/landing sequence.
+                    {'target_hold_confirm_duration': 1.0, 'target_hold_timeout': 4.0},
                 ],
-                # Preserve the legacy mission-manager code: only the cleaning
-                # launch remaps its target input to the stricter combined target.
+                # The legacy Mission Manager is left untouched. In cleaning mode,
+                # its existing target-reached input means "cleaning completed":
+                # alignment+distance -> stop -> spray service SUCCESS.
                 remappings=[
-                    ('/distance_control/target_reached', '/cleaning/target_reached'),
+                    ('/distance_control/target_reached', '/cleaning/complete'),
                 ],
             ),
         ]
