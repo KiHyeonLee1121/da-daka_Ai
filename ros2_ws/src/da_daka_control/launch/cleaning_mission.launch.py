@@ -1,4 +1,4 @@
-"""Launch the complete AI target -> visual servo -> stop -> spray control path."""
+"""Launch the complete AI target-to-spray control path."""
 
 import os
 
@@ -8,7 +8,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
-    """Build the DA-DAKA cleaning stack without changing legacy distance launch."""
+    """Build cleaning nodes without changing the legacy distance launch."""
     package_share = get_package_share_directory('da_daka_control')
 
     def config(name: str) -> str:
@@ -37,8 +37,8 @@ def generate_launch_description() -> LaunchDescription:
                 output='screen',
                 parameters=[config('visual_servo.yaml')],
             ),
-            # In cleaning mode the existing distance controller no longer writes
-            # MAVROS directly. It publishes Z-only to the command mixer.
+            # In cleaning mode the distance controller publishes Z-only to the
+            # mixer instead of writing MAVROS directly.
             Node(
                 package='da_daka_control',
                 executable='distance_controller',
@@ -77,15 +77,17 @@ def generate_launch_description() -> LaunchDescription:
                 output='screen',
                 parameters=[
                     config('distance_mission.yaml'),
-                    # Once spray succeeds, hold the final stopped state briefly
-                    # before handing back to the normal loiter/landing sequence.
-                    {'target_hold_confirm_duration': 1.0, 'target_hold_timeout': 4.0},
+                    {
+                        'target_hold_confirm_duration': 1.0,
+                        'target_hold_timeout': 4.0,
+                    },
                 ],
-                # The legacy Mission Manager is left untouched. In cleaning mode,
-                # its existing target-reached input means "cleaning completed":
-                # alignment+distance -> stop -> spray service SUCCESS.
+                # In cleaning mode target-reached means spray service success.
                 remappings=[
-                    ('/distance_control/target_reached', '/cleaning/complete'),
+                    (
+                        '/distance_control/target_reached',
+                        '/cleaning/complete',
+                    ),
                 ],
             ),
         ]
