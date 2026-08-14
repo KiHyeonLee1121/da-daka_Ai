@@ -1,4 +1,4 @@
-"""Gate spray on fresh AI target, visual alignment, distance hold, and low speed."""
+"""Gate spray on AI target, alignment, distance hold, and low speed."""
 
 import math
 import time
@@ -10,12 +10,13 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 
 class CleaningCoordinatorNode(Node):
-    """Coordinate the final stop -> spray transition without commanding flight."""
+    """Coordinate the final stop-to-spray transition without flight commands."""
 
     def __init__(self) -> None:
         super().__init__('cleaning_coordinator')
@@ -57,11 +58,12 @@ class CleaningCoordinatorNode(Node):
             self._visual_valid_callback,
             latched_qos,
         )
+        # MAVROS local velocity uses the sensor-data QoS profile.
         self.create_subscription(
             TwistStamped,
             self._velocity_topic,
             self._velocity_callback,
-            10,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
             String,
@@ -79,7 +81,10 @@ class CleaningCoordinatorNode(Node):
             self._state_topic,
             latched_qos,
         )
-        self._spray_client = self.create_client(Trigger, self._spray_service)
+        self._spray_client = self.create_client(
+            Trigger,
+            self._spray_service,
+        )
 
         self._ai_healthy = False
         self._detection: Optional[DirtDetection] = None
@@ -98,16 +103,29 @@ class CleaningCoordinatorNode(Node):
         self._publish_complete(False)
         self._publish_state('WAITING')
         self.get_logger().info(
-            'Cleaning coordinator ready; spray requires AI + alignment + distance + stop'
+            'Cleaning coordinator ready; spray requires '
+            'AI + alignment + distance + stop'
         )
 
     def _declare_parameters(self) -> None:
         self.declare_parameter('result_topic', '/ai/detection_result')
         self.declare_parameter('health_topic', '/ai/health')
-        self.declare_parameter('distance_target_topic', '/distance_control/target_reached')
-        self.declare_parameter('visual_aligned_topic', '/visual_servo/aligned')
-        self.declare_parameter('visual_valid_topic', '/visual_servo/target_valid')
-        self.declare_parameter('velocity_topic', '/mavros/local_position/velocity_local')
+        self.declare_parameter(
+            'distance_target_topic',
+            '/distance_control/target_reached',
+        )
+        self.declare_parameter(
+            'visual_aligned_topic',
+            '/visual_servo/aligned',
+        )
+        self.declare_parameter(
+            'visual_valid_topic',
+            '/visual_servo/target_valid',
+        )
+        self.declare_parameter(
+            'velocity_topic',
+            '/mavros/local_position/velocity_local',
+        )
         self.declare_parameter('mission_state_topic', '/mission/state')
         self.declare_parameter('complete_topic', '/cleaning/complete')
         self.declare_parameter('state_topic', '/cleaning/state')
@@ -119,7 +137,9 @@ class CleaningCoordinatorNode(Node):
         self.declare_parameter('max_spray_attempts', 1)
 
     def _load_parameters(self) -> None:
-        value = lambda name: self.get_parameter(name).value
+        def value(name: str):
+            return self.get_parameter(name).value
+
         self._result_topic = str(value('result_topic'))
         self._health_topic = str(value('health_topic'))
         self._distance_target_topic = str(value('distance_target_topic'))
@@ -131,9 +151,13 @@ class CleaningCoordinatorNode(Node):
         self._state_topic = str(value('state_topic'))
         self._spray_service = str(value('spray_service'))
         self._rate_hz = float(value('rate_hz'))
-        self._max_vehicle_speed_mps = float(value('max_vehicle_speed_mps'))
+        self._max_vehicle_speed_mps = float(
+            value('max_vehicle_speed_mps')
+        )
         self._velocity_timeout_s = float(value('velocity_timeout_s'))
-        self._stop_hold_duration_s = float(value('stop_hold_duration_s'))
+        self._stop_hold_duration_s = float(
+            value('stop_hold_duration_s')
+        )
         self._max_spray_attempts = int(value('max_spray_attempts'))
         if min(
             self._rate_hz,
@@ -141,7 +165,9 @@ class CleaningCoordinatorNode(Node):
             self._velocity_timeout_s,
             self._stop_hold_duration_s,
         ) <= 0.0:
-            raise ValueError('cleaning coordinator timing/speed values must be positive')
+            raise ValueError(
+                'cleaning coordinator timing/speed values must be positive'
+            )
         if self._max_spray_attempts < 1:
             raise ValueError('max_spray_attempts must be at least one')
 
@@ -165,14 +191,18 @@ class CleaningCoordinatorNode(Node):
         vy = float(message.twist.linear.y)
         vz = float(message.twist.linear.z)
         if all(math.isfinite(value) for value in (vx, vy, vz)):
-            self._vehicle_speed_mps = math.sqrt(vx * vx + vy * vy + vz * vz)
+            self._vehicle_speed_mps = math.sqrt(
+                vx * vx + vy * vy + vz * vz
+            )
             self._velocity_time_s = time.monotonic()
 
     def _mission_state_callback(self, message: String) -> None:
         previous = self._mission_state
         self._mission_state = str(message.data)
-        if self._mission_state in {'IDLE', 'PRECHECK'} and previous != self._mission_state:
-            self._reset_cycle()
+        reset_states = {'IDLE', 'PRECHECK'}
+        if self._mission_state in reset_states:
+            if previous != self._mission_state:
+                self._reset_cycle()
 
     def _reset_cycle(self) -> None:
         self._ready_since_s = None
@@ -245,13 +275,17 @@ class CleaningCoordinatorNode(Node):
             self._publish_state('SPRAY_FAILED')
             return
         if not bool(response.success):
-            self.get_logger().error(f'spray rejected: {response.message}')
+            self.get_logger().error(
+                f'spray rejected: {response.message}'
+            )
             self._publish_state('SPRAY_FAILED')
             return
         self._complete = True
         self._publish_complete(True)
         self._publish_state('SPRAYED')
-        self.get_logger().info(f'Cleaning spray completed: {response.message}')
+        self.get_logger().info(
+            f'Cleaning spray completed: {response.message}'
+        )
 
     def _publish_complete(self, value: bool) -> None:
         self._complete_publisher.publish(Bool(data=value))
@@ -264,6 +298,7 @@ class CleaningCoordinatorNode(Node):
 
 
 def main(args=None) -> None:
+    """Run the cleaning coordinator node."""
     rclpy.init(args=args)
     node = CleaningCoordinatorNode()
     try:
