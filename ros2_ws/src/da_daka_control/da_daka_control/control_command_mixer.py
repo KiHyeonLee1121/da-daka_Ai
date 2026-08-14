@@ -1,4 +1,4 @@
-"""Merge LiDAR Z control and AI visual XY correction into one MAVROS setpoint."""
+"""Merge LiDAR Z control and AI visual XY into one MAVROS setpoint."""
 
 import time
 from typing import Optional
@@ -8,18 +8,12 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Bool
 
 
 class ControlCommandMixerNode(Node):
-    """Remain the only cleaning-stack publisher to MAVROS velocity setpoints.
-
-    Distance control publishes an intermediate Z command and visual servo publishes
-    an intermediate XY command. This node combines them, preventing two independent
-    nodes from racing on /mavros/setpoint_velocity/cmd_vel. It also publishes a
-    combined target flag that is true only when both LiDAR distance and AI visual
-    alignment are satisfied.
-    """
+    """Publish the cleaning stack's single MAVROS velocity setpoint."""
 
     def __init__(self) -> None:
         super().__init__('control_command_mixer')
@@ -35,10 +29,11 @@ class ControlCommandMixerNode(Node):
         self._last_healthy: Optional[bool] = None
         self._last_combined_target: Optional[bool] = None
 
+        # Preserve the existing distance-controller/MAVROS sensor-data QoS.
         self._publisher = self.create_publisher(
             TwistStamped,
             self._output_topic,
-            10,
+            qos_profile_sensor_data,
         )
         latched_qos = QoSProfile(
             depth=1,
@@ -59,7 +54,7 @@ class ControlCommandMixerNode(Node):
             TwistStamped,
             self._distance_command_topic,
             self._distance_callback,
-            10,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
             TwistStamped,
@@ -85,20 +80,45 @@ class ControlCommandMixerNode(Node):
             self._distance_target_callback,
             latched_qos,
         )
-        self._timer = self.create_timer(1.0 / self._publish_rate_hz, self._tick)
+        self._timer = self.create_timer(
+            1.0 / self._publish_rate_hz,
+            self._tick,
+        )
         self._publish_combined_target(False)
         self.get_logger().info(
-            f'Control mixer ready; sole MAVROS velocity output={self._output_topic}'
+            'Control mixer ready; sole MAVROS velocity output='
+            f'{self._output_topic}'
         )
 
     def _declare_parameters(self) -> None:
-        self.declare_parameter('distance_command_topic', '/distance_control/cmd_vel_z')
-        self.declare_parameter('visual_command_topic', '/visual_servo/cmd_vel_xy')
-        self.declare_parameter('visual_target_valid_topic', '/visual_servo/target_valid')
-        self.declare_parameter('visual_aligned_topic', '/visual_servo/aligned')
-        self.declare_parameter('distance_target_topic', '/distance_control/target_reached')
-        self.declare_parameter('combined_target_topic', '/cleaning/target_reached')
-        self.declare_parameter('output_topic', '/mavros/setpoint_velocity/cmd_vel')
+        self.declare_parameter(
+            'distance_command_topic',
+            '/distance_control/cmd_vel_z',
+        )
+        self.declare_parameter(
+            'visual_command_topic',
+            '/visual_servo/cmd_vel_xy',
+        )
+        self.declare_parameter(
+            'visual_target_valid_topic',
+            '/visual_servo/target_valid',
+        )
+        self.declare_parameter(
+            'visual_aligned_topic',
+            '/visual_servo/aligned',
+        )
+        self.declare_parameter(
+            'distance_target_topic',
+            '/distance_control/target_reached',
+        )
+        self.declare_parameter(
+            'combined_target_topic',
+            '/cleaning/target_reached',
+        )
+        self.declare_parameter(
+            'output_topic',
+            '/mavros/setpoint_velocity/cmd_vel',
+        )
         self.declare_parameter('health_topic', '/control_mixer/healthy')
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('publish_rate_hz', 20.0)
@@ -107,10 +127,16 @@ class ControlCommandMixerNode(Node):
         self.declare_parameter('require_visual_target', True)
 
     def _load_parameters(self) -> None:
-        value = lambda name: self.get_parameter(name).value
-        self._distance_command_topic = str(value('distance_command_topic'))
+        def value(name: str):
+            return self.get_parameter(name).value
+
+        self._distance_command_topic = str(
+            value('distance_command_topic')
+        )
         self._visual_command_topic = str(value('visual_command_topic'))
-        self._visual_target_valid_topic = str(value('visual_target_valid_topic'))
+        self._visual_target_valid_topic = str(
+            value('visual_target_valid_topic')
+        )
         self._visual_aligned_topic = str(value('visual_aligned_topic'))
         self._distance_target_topic = str(value('distance_target_topic'))
         self._combined_target_topic = str(value('combined_target_topic'))
@@ -118,10 +144,16 @@ class ControlCommandMixerNode(Node):
         self._health_topic = str(value('health_topic'))
         self._frame_id = str(value('frame_id'))
         self._publish_rate_hz = float(value('publish_rate_hz'))
-        self._distance_timeout_s = float(value('distance_command_timeout_s'))
+        self._distance_timeout_s = float(
+            value('distance_command_timeout_s')
+        )
         self._visual_timeout_s = float(value('visual_command_timeout_s'))
         self._require_visual_target = bool(value('require_visual_target'))
-        if min(self._publish_rate_hz, self._distance_timeout_s, self._visual_timeout_s) <= 0.0:
+        if min(
+            self._publish_rate_hz,
+            self._distance_timeout_s,
+            self._visual_timeout_s,
+        ) <= 0.0:
             raise ValueError('control mixer rates/timeouts must be positive')
 
     def _distance_callback(self, message: TwistStamped) -> None:
@@ -185,10 +217,13 @@ class ControlCommandMixerNode(Node):
             return
         self._combined_target_publisher.publish(Bool(data=value))
         self._last_combined_target = value
-        self.get_logger().info(f'Combined cleaning target reached={value}')
+        self.get_logger().info(
+            f'Combined cleaning target reached={value}'
+        )
 
 
 def main(args=None) -> None:
+    """Run the control command mixer node."""
     rclpy.init(args=args)
     node = ControlCommandMixerNode()
     try:
