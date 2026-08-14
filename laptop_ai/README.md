@@ -1,12 +1,29 @@
-# DA-DAKA Laptop AI — Primary Inference Path
+# DA-DAKA Laptop AI — Linux RTX inference
 
-Raspberry Pi 영상 스트림을 Linux 노트북에서 받아 오염 검출만 수행하고, 작은
-UDP JSON 결과를 Pi로 돌려보내는 AI 프로세스다. Pixhawk, MAVLink, MAVROS,
-Mission Manager 또는 분사 장치에 연결하지 않는다.
+Raspberry Pi 영상 스트림을 Linux 노트북에서 받아 **태양광 패널 ROI를 먼저 찾고,
+그 패널 내부에서만 오염을 검출한 뒤 full-frame 정규화 좌표를 Pi로 반환**하는
+AI 프로세스다. 노트북은 Pixhawk, MAVLink, MAVROS, Mission Manager 또는 분사
+장치를 직접 제어하지 않는다.
 
 현재 production target은 **Linux + NVIDIA GeForce RTX 5060 계열 GPU**다.
-`config/laptop_ai.yaml`이 이 환경의 기본 프로파일이며, CPU/OpenCV 개발만 할
-때는 `config/opencv_dev.yaml`을 사용한다.
+`config/laptop_ai.yaml`이 기본 production 프로파일이고, CPU/OpenCV 개발은
+`config/opencv_dev.yaml`을 사용한다.
+
+전체 제어 경로는 `../docs/e2e_cleaning_pipeline.md`에 정리되어 있다.
+
+## 핵심 데이터 경계
+
+```text
+Pi camera -> H.264 -> laptop
+                     panel ROI
+                        -> dirt inference
+                        -> normalized dirt coordinate
+                     UDP JSON -> Pi
+                                  visual servo / LiDAR / Pixhawk / spray gate
+```
+
+Pendulum-inspired optimizer는 이 좌표를 만들기 전의 bitrate/model profile만
+선택할 수 있으며, Pi 제어 계층에는 optimizer 내부 상태를 전달하지 않는다.
 
 ## Linux NVIDIA 설치와 실행
 
@@ -28,47 +45,36 @@ python -m laptop_ai.main --config config/laptop_ai.yaml
 NVIDIA/TensorRT 세부 튜닝과 검증 절차는
 [`../docs/linux_rtx5060_gpu.md`](../docs/linux_rtx5060_gpu.md)를 참고한다.
 
-## 개발용 OpenCV 경로
+## 패널 -> 오염 파이프라인
 
-실제 ONNX 모델이 아직 준비되지 않았거나 CPU-only 개발을 할 때만 다음처럼
-실행한다.
+Production config의 `panel.mode: contour`는 영상에서 가장 큰 사각형 계열 패널
+ROI를 찾고, 해당 ROI 안에서만 dirt detector를 실행한다. ROI 내부에서 나온
+centroid/bbox는 `PanelDirtPipeline`에서 다시 원본 영상 좌표로 remap된다. 따라서
+Pi가 받는 `centroid_x_norm`, `centroid_y_norm`은 항상 전체 카메라 frame 기준
+`0.0..1.0` 좌표다.
 
-```bash
-cd laptop_ai
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m laptop_ai.main --config config/opencv_dev.yaml
-```
-
-이 개발 경로는 production GPU 성능을 대표하지 않는다.
+패널 contour를 찾지 못하면 오염 좌표를 만들지 않는다. 개발/벤치에서는
+`panel.mode: full_frame` 또는 `manual`을 사용할 수 있다.
 
 ## 영상 입력
 
-기본 production profile은 Pi의 H.264 RTP/UDP stream을 GStreamer로 받는다.
-수신 thread는 큐 대신 최신 프레임 한 장만 유지한다. 추론이 느리면 처리하지
-못한 오래된 프레임을 버리며, `max_frame_age_s`를 넘은 프레임은 추론하지
-않는다.
+`video.source`는 RTSP/HTTP URL, GStreamer pipeline, 로컬 카메라 번호 또는 파일
+경로를 받을 수 있다. 수신 thread는 queue를 쌓지 않고 최신 frame 한 장만
+유지해 stale frame이 제어 쪽으로 전달되지 않게 한다.
+
+Production H.264 예시는 다음과 같다.
 
 ```yaml
 video:
   backend: gstreamer
   source: "udpsrc port=5600 caps=application/x-rtp,media=video,encoding-name=H264,payload=96 ! rtpjitterbuffer latency=20 drop-on-latency=true ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1 sync=false"
   capture_buffer_size: 1
-  max_frame_age_s: 0.35
 ```
 
-RTSP, HTTP MJPEG, local webcam과 local video file도 `VideoReceiver`가 받을 수
-있지만 실제 비행 지연 검증은 production H.264 경로에서 다시 측정한다.
-카메라는 Pi의 stream producer 한 프로세스만 열어야 한다.
+카메라는 Pi의 stream producer 한 프로세스만 열어야 한다. 루트 `main.py`와 별도
+stream server가 같은 카메라를 동시에 열면 안 된다.
 
-## ONNX GPU 경로
-
-현재 detector contract는 첫 output tensor가
-`[x1, y1, x2, y2, score, class_id]` 행 구조인 모델이다. 일반 YOLO raw output을
-그대로 사용할 수 없으며 export 단계에서 NMS를 포함시키거나 모델별
-postprocess를 추가해야 한다.
-
-production 설정의 핵심:
+## ONNX detector 계약
 
 ```yaml
 detector:
@@ -78,92 +84,39 @@ detector:
   require_gpu: true
   input_width: 640
   input_height: 640
-
-performance:
-  opencv_num_threads: 2
-  onnx_intra_op_threads: 1
-  onnx_inter_op_threads: 1
-  onnx_execution_mode: sequential
-  onnx_graph_optimization: all
-  onnx_warmup_runs: 20
-  onnx_use_io_binding: true
-  onnx_cuda_enable_graph: true
-  onnx_cuda_conv_use_max_workspace: true
-  onnx_cuda_cudnn_conv_algo_search: EXHAUSTIVE
-  onnx_cuda_arena_extend_strategy: kNextPowerOfTwo
-  onnx_cuda_use_tf32: true
-  onnx_cuda_prefer_nhwc: false
-  cuda_module_loading_lazy: true
+  class_id: 0
+  output_format: xyxy_score_class
 ```
 
-fixed-shape 모델에서는 `OnnxInferenceRunner`가 GPU input/output `OrtValue`를
-재사용하고, 매 프레임 input의 내용만 `update_inplace()`로 갱신한다. CUDA Graph
-사용 시 같은 device address를 유지해 graph replay가 가능하도록 한다.
+현재 후처리는 첫 output tensor가 `[x1, y1, x2, y2, score, class_id]` 행인 모델을
+지원한다. 일반 YOLO raw output을 그대로 넣는다고 가정하지 않는다. 실제 모델
+export/postprocess 계약을 맞춰야 한다.
 
-모델이 dynamic output이거나 CUDA Graph capture를 지원하지 않으면
-`onnx_cuda_enable_graph: false`로 비활성화하고 I/O binding만 유지해 벤치한다.
+## RTX 5060 성능 설정
 
-## TensorRT
+Production profile은 fixed-shape 모델에서 다음 경로를 사용한다.
 
-TensorRT는 `auto`로 무조건 켜는 대신 실제 RTX 5060 장비와 실제 모델에서
-CUDA EP보다 빨라지는지 먼저 측정한 뒤 opt-in한다. TensorRT를 쓸 때는
-engine/timing cache를 사용하되 모델, GPU, TensorRT/ORT 버전 변경 시 cache를
-재생성한다.
+- ONNX Runtime CUDA EP
+- FP16 모델
+- graph optimization `all`
+- I/O binding
+- fixed GPU input/output buffer 재사용
+- 호환 모델에서 CUDA Graph capture/replay
+- cuDNN exhaustive convolution search
+- maximum convolution workspace
+- TF32 허용
+- CUDA memory arena `kNextPowerOfTwo`
+- `CUDA_MODULE_LOADING=LAZY`
+- startup warm-up 20회
+- bounded CPU/OpenCV thread pools
 
-provider별 추론 벤치마크:
+TensorRT는 실제 dirt 모델과 노트북에서 CUDA EP보다 end-to-end latency가 낮은지
+측정한 뒤 opt-in한다.
 
-```bash
-python -m laptop_ai.benchmark_onnx \
-  --model models/dirt_detector.fp16.onnx \
-  --provider cuda \
-  --io-binding
-```
+## UDP 결과
 
-TensorRT 환경 검증 후:
-
-```bash
-python -m laptop_ai.benchmark_onnx \
-  --model models/dirt_detector.fp16.onnx \
-  --provider tensorrt \
-  --io-binding
-```
-
-최고 한 번의 결과가 아니라 warm-up 이후 median/p95와 capture-to-result
-latency를 비교한다.
-
-## FP16 모델
-
-원본 FP32 모델을 덮어쓰지 않고 별도 FP16 모델을 만든다.
-
-```bash
-python -m pip install -r requirements-tools.txt
-python -m laptop_ai.convert_onnx_fp16 \
-  --input models/dirt_detector.onnx \
-  --output models/dirt_detector.fp16.onnx
-```
-
-FP16 모델은 실제 오염 validation set에서 FP32 대비 precision/recall,
-confidence threshold 경계, bbox 오차를 통과한 뒤 production path에 넣는다.
-
-## Pendulum-inspired network/compute optimization
-
-이 브랜치에는 Pi-to-laptop video bitrate와 laptop DNN compute cost를 함께 보는
-Pendulum-inspired optimizer가 있다. 상세 구조는
-[`../docs/pendulum_optimization.md`](../docs/pendulum_optimization.md)를 참고한다.
-
-RTX 5060 marketing 성능 수치를 scheduler에 직접 넣지 않는다. 실제 light / medium /
-heavy detector 각각에 대해 production CUDA 또는 검증된 TensorRT 경로에서
-`inference_ms`와 accuracy를 측정하고, 그 값으로
-`{bitrate, inference_ms, accuracy}` demand curve를 만든다.
-
-현재 optimizer는 flight control과 분리되어 있으며 Pi encoder 제어 endpoint가
-아직 없으므로 기본 `observe` 모드다.
-
-## UDP JSON
-
-모든 packet은 protocol version 1의 완전한 schema를 사용한다. 좌표와 bbox는
-`0.0..1.0` 정규화 값이며 JSON 생성 전 finite/range/bbox 경계를 검사한다.
-원본 이미지나 segmentation mask는 UDP로 보내지 않는다.
+Pi에는 이미지나 segmentation mask를 보내지 않고 작은 JSON 결과만 전송한다.
+좌표는 전체 frame 기준 정규화 값이다.
 
 ```json
 {
@@ -185,26 +138,26 @@ heavy detector 각각에 대해 production CUDA 또는 검증된 TensorRT 경로
   "bbox_h_norm": 0.15,
   "area_ratio": 0.018,
   "confidence": 0.91,
-  "inference_time_ms": 8.2,
+  "inference_time_ms": 18.2,
   "model_name": "dirt_detector.fp16.onnx",
   "sequence": 18342
 }
 ```
 
-검출이 없을 때도 동일 schema를 보내되 검출 좌표, 면적과 confidence는 0이다.
-네트워크 단절 중에는 새 결과가 생기지 않으므로 Pi receiver의 heartbeat timeout이
-AI를 unhealthy로 전환한다.
+Pi의 `ai_result_receiver`가 source/session/sequence/range/confidence/freshness를
+검증한 뒤에만 ROS `DirtDetection`으로 publish한다. 검출이 없으면 detection 관련
+수치는 모두 0이다.
 
-## 로그와 테스트
-
-주기 summary에는 frame ID, 처리 FPS, inference time, capture-to-send 추정 지연,
-검출/confidence, UDP 성공/실패, 재접속과 dropped frame 수가 포함된다.
+## 테스트
 
 ```bash
 cd laptop_ai
 python -m pytest tests
 ```
 
-실기체 연결 전에는 local video -> UDP loopback -> Pi receiver -> SITL ->
-프로펠러 제거 bench test 순으로 확인한다. 이 프로그램은 어떤 설정에서도
-자동 Arm, Takeoff, PX4 mode 전환 또는 분사를 수행하지 않는다.
+특히 `test_panel_pipeline.py`는 ROI 내부 좌표가 원본 frame 좌표로 정확히
+remap되는지 검사한다.
+
+실기체 연결 전에는 local video -> UDP loopback -> Pi receiver -> ROS cleaning
+launch -> SITL -> 프로펠러 제거 bench test 순으로 확인한다. 노트북 AI 프로세스는
+어떤 설정에서도 자동 Arm, Takeoff, PX4 mode 전환 또는 분사를 수행하지 않는다.
