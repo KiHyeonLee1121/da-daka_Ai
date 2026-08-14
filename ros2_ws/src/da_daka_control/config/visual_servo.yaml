@@ -1,0 +1,27 @@
+visual_servo:
+  ros__parameters:
+    result_topic: /ai/detection_result
+    health_topic: /ai/health
+    command_topic: /visual_servo/cmd_vel_xy
+    aligned_topic: /visual_servo/aligned
+    target_valid_topic: /visual_servo/target_valid
+    frame_id: map
+    control_rate_hz: 20.0
+    target_timeout_s: 0.5
+
+    # Normalized image-space deadband around the frame center.
+    horizontal_deadband_norm: 0.04
+    vertical_deadband_norm: 0.04
+
+    kp_horizontal: 0.35
+    kp_vertical: 0.35
+    max_horizontal_speed_mps: 0.12
+    max_vertical_image_speed_mps: 0.12
+
+    # Default mapping follows the existing project convention:
+    # image X -> vehicle Y, image Y -> vehicle X.
+    # Confirm signs with props removed before flight.
+    horizontal_axis: y
+    vertical_axis: x
+    invert_horizontal: false
+    invert_vertical: true
