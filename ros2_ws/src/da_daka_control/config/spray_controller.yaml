@@ -1,0 +1,11 @@
+spray_controller:
+  ros__parameters:
+    service_topic: /spray/trigger
+    active_topic: /spray/active
+    event_topic: /spray/last_event
+    pulse_duration_s: 0.30
+
+    # Physical relay/servo mapping is not defined in the repository yet.
+    # Keep fail-closed until that exact Pixhawk output is bench-tested.
+    backend: dry_run
+    dry_run: true
