@@ -16,7 +16,9 @@ class ControlCommandMixerNode(Node):
 
     Distance control publishes an intermediate Z command and visual servo publishes
     an intermediate XY command. This node combines them, preventing two independent
-    nodes from racing on /mavros/setpoint_velocity/cmd_vel.
+    nodes from racing on /mavros/setpoint_velocity/cmd_vel. It also publishes a
+    combined target flag that is true only when both LiDAR distance and AI visual
+    alignment are satisfied.
     """
 
     def __init__(self) -> None:
@@ -28,7 +30,10 @@ class ControlCommandMixerNode(Node):
         self._visual_command: Optional[TwistStamped] = None
         self._visual_time_s: Optional[float] = None
         self._visual_target_valid = False
+        self._visual_aligned = False
+        self._distance_target_reached = False
         self._last_healthy: Optional[bool] = None
+        self._last_combined_target: Optional[bool] = None
 
         self._publisher = self.create_publisher(
             TwistStamped,
@@ -43,6 +48,11 @@ class ControlCommandMixerNode(Node):
         self._health_publisher = self.create_publisher(
             Bool,
             self._health_topic,
+            latched_qos,
+        )
+        self._combined_target_publisher = self.create_publisher(
+            Bool,
+            self._combined_target_topic,
             latched_qos,
         )
         self.create_subscription(
@@ -63,7 +73,20 @@ class ControlCommandMixerNode(Node):
             self._valid_callback,
             latched_qos,
         )
+        self.create_subscription(
+            Bool,
+            self._visual_aligned_topic,
+            self._aligned_callback,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            self._distance_target_topic,
+            self._distance_target_callback,
+            latched_qos,
+        )
         self._timer = self.create_timer(1.0 / self._publish_rate_hz, self._tick)
+        self._publish_combined_target(False)
         self.get_logger().info(
             f'Control mixer ready; sole MAVROS velocity output={self._output_topic}'
         )
@@ -72,6 +95,9 @@ class ControlCommandMixerNode(Node):
         self.declare_parameter('distance_command_topic', '/distance_control/cmd_vel_z')
         self.declare_parameter('visual_command_topic', '/visual_servo/cmd_vel_xy')
         self.declare_parameter('visual_target_valid_topic', '/visual_servo/target_valid')
+        self.declare_parameter('visual_aligned_topic', '/visual_servo/aligned')
+        self.declare_parameter('distance_target_topic', '/distance_control/target_reached')
+        self.declare_parameter('combined_target_topic', '/cleaning/target_reached')
         self.declare_parameter('output_topic', '/mavros/setpoint_velocity/cmd_vel')
         self.declare_parameter('health_topic', '/control_mixer/healthy')
         self.declare_parameter('frame_id', 'map')
@@ -85,6 +111,9 @@ class ControlCommandMixerNode(Node):
         self._distance_command_topic = str(value('distance_command_topic'))
         self._visual_command_topic = str(value('visual_command_topic'))
         self._visual_target_valid_topic = str(value('visual_target_valid_topic'))
+        self._visual_aligned_topic = str(value('visual_aligned_topic'))
+        self._distance_target_topic = str(value('distance_target_topic'))
+        self._combined_target_topic = str(value('combined_target_topic'))
         self._output_topic = str(value('output_topic'))
         self._health_topic = str(value('health_topic'))
         self._frame_id = str(value('frame_id'))
@@ -105,6 +134,12 @@ class ControlCommandMixerNode(Node):
 
     def _valid_callback(self, message: Bool) -> None:
         self._visual_target_valid = bool(message.data)
+
+    def _aligned_callback(self, message: Bool) -> None:
+        self._visual_aligned = bool(message.data)
+
+    def _distance_target_callback(self, message: Bool) -> None:
+        self._distance_target_reached = bool(message.data)
 
     def _tick(self) -> None:
         now_s = time.monotonic()
@@ -132,10 +167,25 @@ class ControlCommandMixerNode(Node):
             output.twist.linear.z = self._distance_command.twist.linear.z
             output.twist.angular.z = self._visual_command.twist.angular.z
         self._publisher.publish(output)
+
+        combined_target = (
+            healthy
+            and self._visual_target_valid
+            and self._visual_aligned
+            and self._distance_target_reached
+        )
+        self._publish_combined_target(combined_target)
         if healthy != self._last_healthy:
             self._health_publisher.publish(Bool(data=healthy))
             self._last_healthy = healthy
             self.get_logger().info(f'Control mixer healthy={healthy}')
+
+    def _publish_combined_target(self, value: bool) -> None:
+        if value == self._last_combined_target:
+            return
+        self._combined_target_publisher.publish(Bool(data=value))
+        self._last_combined_target = value
+        self.get_logger().info(f'Combined cleaning target reached={value}')
 
 
 def main(args=None) -> None:
