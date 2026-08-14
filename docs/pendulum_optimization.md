@@ -30,6 +30,19 @@ allocator is therefore unnecessary at this stage: selecting a cost-efficient
 point on the single stream's Pareto frontier gives the intended trade-off with
 less state and lower integration risk.
 
+## Deployed compute target
+
+The laptop inference target is Linux + NVIDIA GeForce RTX 5060 class hardware.
+The production-oriented configuration is
+`laptop_ai/config/linux_rtx5060.yaml`, documented in
+`docs/linux_rtx5060_gpu.md`.
+
+The scheduler must not infer compute cost from GPU marketing specifications.
+Each detector profile's `inference_ms` is measured on the deployed laptop using
+its actual CUDA/TensorRT provider, FP16 model, preprocessing path, and warm cache.
+This keeps Pendulum's demand curve tied to the real end-to-end system rather than
+a synthetic GPU capacity estimate.
+
 ## Files
 
 - `laptop_ai/laptop_ai/joint_optimizer.py`: demand points, Pareto frontier,
@@ -41,6 +54,8 @@ less state and lower integration risk.
 - `laptop_ai/laptop_ai/optimizer_cli.py`: evaluate a profiled curve without
   starting video inference.
 - `laptop_ai/config/pendulum_optimization.yaml`: disabled example configuration.
+- `laptop_ai/config/linux_rtx5060.yaml`: Linux NVIDIA production inference
+  profile with GPU-required CUDA execution, device-buffer reuse, and CUDA Graph.
 
 ## Safety and integrity rules
 
@@ -55,6 +70,8 @@ less state and lower integration risk.
    decision; the optimizer does not claim an accuracy guarantee in that state.
 6. Detector-model accuracy and bitrate profiles must be measured on the actual
    dirt dataset and acrylic/solar-panel scene conditions before live use.
+7. The RTX production profile uses `require_gpu: true`; loss of the CUDA provider
+   is a startup failure instead of a silent CPU fallback.
 
 ## Profiling workflow
 
@@ -65,7 +82,8 @@ minimum:
 - detector inference median and p95 in ms;
 - end-to-end capture-to-result latency;
 - dirt detection accuracy metric on a fixed validation set;
-- scene category (static/good light, motion, glare/poor light).
+- scene category (static/good light, motion, glare/poor light);
+- execution provider and precision (for example CUDA FP16).
 
 Only measured accuracy-satisfying points should be placed in the runtime demand
 curve. Dominated points are removed automatically by `pareto_frontier()`.
