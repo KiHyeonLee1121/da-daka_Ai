@@ -1,0 +1,17 @@
+cleaning_coordinator:
+  ros__parameters:
+    result_topic: /ai/detection_result
+    health_topic: /ai/health
+    distance_target_topic: /distance_control/target_reached
+    visual_aligned_topic: /visual_servo/aligned
+    visual_valid_topic: /visual_servo/target_valid
+    velocity_topic: /mavros/local_position/velocity_local
+    mission_state_topic: /mission/state
+    complete_topic: /cleaning/complete
+    state_topic: /cleaning/state
+    spray_service: /spray/trigger
+    rate_hz: 20.0
+    max_vehicle_speed_mps: 0.08
+    velocity_timeout_s: 0.5
+    stop_hold_duration_s: 0.20
+    max_spray_attempts: 1
