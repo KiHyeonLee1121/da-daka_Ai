@@ -3,6 +3,9 @@ control_command_mixer:
     distance_command_topic: /distance_control/cmd_vel_z
     visual_command_topic: /visual_servo/cmd_vel_xy
     visual_target_valid_topic: /visual_servo/target_valid
+    visual_aligned_topic: /visual_servo/aligned
+    distance_target_topic: /distance_control/target_reached
+    combined_target_topic: /cleaning/target_reached
     output_topic: /mavros/setpoint_velocity/cmd_vel
     health_topic: /control_mixer/healthy
     frame_id: map
