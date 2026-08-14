@@ -85,13 +85,19 @@ def test_gpu_provider_options_enable_linux_nvidia_tuning() -> None:
     )
 
 
-def test_primary_config_is_headless_and_graph_optimized() -> None:
+def test_primary_config_targets_linux_nvidia_gpu() -> None:
     config = load_config("config/laptop_ai.yaml")
     assert not config.debug.show_window
-    assert config.detector.execution_provider == "auto"
+    assert config.video.backend == "gstreamer"
+    assert config.detector.backend == "onnx"
+    assert config.detector.execution_provider == "cuda"
+    assert config.detector.require_gpu
     assert config.performance.onnx_graph_optimization == "all"
     assert config.performance.onnx_device_id == 0
-    assert config.performance.opencv_num_threads == 12
-    assert config.performance.onnx_intra_op_threads == 12
-    assert config.performance.onnx_warmup_runs == 3
+    assert config.performance.opencv_num_threads == 2
+    assert config.performance.onnx_intra_op_threads == 1
+    assert config.performance.onnx_inter_op_threads == 1
+    assert config.performance.onnx_warmup_runs == 20
     assert config.performance.onnx_use_io_binding
+    assert config.performance.onnx_cuda_enable_graph
+    assert config.performance.cuda_module_loading_lazy
