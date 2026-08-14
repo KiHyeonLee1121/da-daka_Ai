@@ -1,2 +1,4 @@
 -r requirements-common.txt
-onnxruntime-gpu>=1.18.0
+# Generic CUDA/TensorRT development path. For the deployed Linux RTX 5060 host,
+# use requirements-nvidia-linux.txt so the tested CUDA 12.x ORT line is explicit.
+onnxruntime-gpu>=1.21.0
