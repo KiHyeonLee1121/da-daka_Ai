@@ -1,0 +1,4 @@
+-r requirements-common.txt
+# CUDA 12.x/cuDNN 9 line. Re-benchmark before moving this production profile to
+# ORT 1.27+ (whose default PyPI GPU builds use CUDA 13.x).
+onnxruntime-gpu[cuda,cudnn]>=1.21.0,<1.27.0
