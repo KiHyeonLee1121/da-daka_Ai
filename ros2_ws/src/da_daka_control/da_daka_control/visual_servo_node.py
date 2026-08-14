@@ -1,4 +1,4 @@
-"""Convert validated laptop dirt coordinates into bounded horizontal corrections."""
+"""Convert validated dirt coordinates into bounded XY corrections."""
 
 import math
 import time
@@ -31,7 +31,7 @@ def compute_visual_velocity(
     invert_horizontal: bool,
     invert_vertical: bool,
 ) -> tuple[float, float, bool]:
-    """Return image-horizontal/image-vertical velocity corrections and alignment."""
+    """Return image-axis corrections and whether the target is aligned."""
     error_x = centroid_x_norm - 0.5
     error_y = centroid_y_norm - 0.5
     aligned = (
@@ -44,9 +44,15 @@ def compute_visual_velocity(
     horizontal = 0.0
     vertical = 0.0
     if abs(error_x) > horizontal_deadband_norm:
-        horizontal = clamp(kp_horizontal * error_x, max_horizontal_speed_mps)
+        horizontal = clamp(
+            kp_horizontal * error_x,
+            max_horizontal_speed_mps,
+        )
     if abs(error_y) > vertical_deadband_norm:
-        vertical = clamp(kp_vertical * error_y, max_vertical_image_speed_mps)
+        vertical = clamp(
+            kp_vertical * error_y,
+            max_vertical_image_speed_mps,
+        )
     if invert_horizontal:
         horizontal *= -1.0
     if invert_vertical:
@@ -55,7 +61,7 @@ def compute_visual_velocity(
 
 
 class VisualServoNode(Node):
-    """Publish AI-derived XY correction only; never publish MAVROS setpoints directly."""
+    """Publish AI-derived XY corrections without writing MAVROS directly."""
 
     def __init__(self) -> None:
         super().__init__('visual_servo')
@@ -100,7 +106,10 @@ class VisualServoNode(Node):
         self._last_detection_time_s: Optional[float] = None
         self._last_aligned: Optional[bool] = None
         self._last_valid: Optional[bool] = None
-        self._timer = self.create_timer(1.0 / self._control_rate_hz, self._tick)
+        self._timer = self.create_timer(
+            1.0 / self._control_rate_hz,
+            self._tick,
+        )
         self._publish_state(False, False)
         self.get_logger().info(
             'Visual servo ready; AI coordinates -> bounded XY correction only'
@@ -109,9 +118,15 @@ class VisualServoNode(Node):
     def _declare_parameters(self) -> None:
         self.declare_parameter('result_topic', '/ai/detection_result')
         self.declare_parameter('health_topic', '/ai/health')
-        self.declare_parameter('command_topic', '/visual_servo/cmd_vel_xy')
+        self.declare_parameter(
+            'command_topic',
+            '/visual_servo/cmd_vel_xy',
+        )
         self.declare_parameter('aligned_topic', '/visual_servo/aligned')
-        self.declare_parameter('target_valid_topic', '/visual_servo/target_valid')
+        self.declare_parameter(
+            'target_valid_topic',
+            '/visual_servo/target_valid',
+        )
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('control_rate_hz', 20.0)
         self.declare_parameter('target_timeout_s', 0.5)
@@ -127,7 +142,9 @@ class VisualServoNode(Node):
         self.declare_parameter('invert_vertical', True)
 
     def _load_parameters(self) -> None:
-        value = lambda name: self.get_parameter(name).value
+        def value(name: str):
+            return self.get_parameter(name).value
+
         self._result_topic = str(value('result_topic'))
         self._health_topic = str(value('health_topic'))
         self._command_topic = str(value('command_topic'))
@@ -136,12 +153,20 @@ class VisualServoNode(Node):
         self._frame_id = str(value('frame_id'))
         self._control_rate_hz = float(value('control_rate_hz'))
         self._target_timeout_s = float(value('target_timeout_s'))
-        self._horizontal_deadband_norm = float(value('horizontal_deadband_norm'))
-        self._vertical_deadband_norm = float(value('vertical_deadband_norm'))
+        self._horizontal_deadband_norm = float(
+            value('horizontal_deadband_norm')
+        )
+        self._vertical_deadband_norm = float(
+            value('vertical_deadband_norm')
+        )
         self._kp_horizontal = float(value('kp_horizontal'))
         self._kp_vertical = float(value('kp_vertical'))
-        self._max_horizontal_speed_mps = float(value('max_horizontal_speed_mps'))
-        self._max_vertical_image_speed_mps = float(value('max_vertical_image_speed_mps'))
+        self._max_horizontal_speed_mps = float(
+            value('max_horizontal_speed_mps')
+        )
+        self._max_vertical_image_speed_mps = float(
+            value('max_vertical_image_speed_mps')
+        )
         self._horizontal_axis = str(value('horizontal_axis')).lower()
         self._vertical_axis = str(value('vertical_axis')).lower()
         self._invert_horizontal = bool(value('invert_horizontal'))
@@ -149,15 +174,24 @@ class VisualServoNode(Node):
         if self._control_rate_hz <= 0.0 or self._target_timeout_s <= 0.0:
             raise ValueError('visual servo rates/timeouts must be positive')
         if not 0.0 <= self._horizontal_deadband_norm < 0.5:
-            raise ValueError('horizontal_deadband_norm must be within [0, 0.5)')
+            raise ValueError(
+                'horizontal_deadband_norm must be within [0, 0.5)'
+            )
         if not 0.0 <= self._vertical_deadband_norm < 0.5:
-            raise ValueError('vertical_deadband_norm must be within [0, 0.5)')
+            raise ValueError(
+                'vertical_deadband_norm must be within [0, 0.5)'
+            )
         if min(self._kp_horizontal, self._kp_vertical) < 0.0:
             raise ValueError('visual servo gains cannot be negative')
-        if min(self._max_horizontal_speed_mps, self._max_vertical_image_speed_mps) <= 0.0:
+        if min(
+            self._max_horizontal_speed_mps,
+            self._max_vertical_image_speed_mps,
+        ) <= 0.0:
             raise ValueError('visual servo speed limits must be positive')
         if {self._horizontal_axis, self._vertical_axis} != {'x', 'y'}:
-            raise ValueError('horizontal_axis and vertical_axis must be distinct x/y axes')
+            raise ValueError(
+                'horizontal_axis and vertical_axis must be distinct x/y axes'
+            )
 
     def _health_callback(self, message: Bool) -> None:
         self._ai_healthy = bool(message.data)
@@ -186,12 +220,18 @@ class VisualServoNode(Node):
             horizontal, vertical, aligned = compute_visual_velocity(
                 centroid_x_norm=float(self._detection.centroid_x_norm),
                 centroid_y_norm=float(self._detection.centroid_y_norm),
-                horizontal_deadband_norm=self._horizontal_deadband_norm,
+                horizontal_deadband_norm=(
+                    self._horizontal_deadband_norm
+                ),
                 vertical_deadband_norm=self._vertical_deadband_norm,
                 kp_horizontal=self._kp_horizontal,
                 kp_vertical=self._kp_vertical,
-                max_horizontal_speed_mps=self._max_horizontal_speed_mps,
-                max_vertical_image_speed_mps=self._max_vertical_image_speed_mps,
+                max_horizontal_speed_mps=(
+                    self._max_horizontal_speed_mps
+                ),
+                max_vertical_image_speed_mps=(
+                    self._max_vertical_image_speed_mps
+                ),
                 invert_horizontal=self._invert_horizontal,
                 invert_vertical=self._invert_vertical,
             )
@@ -201,7 +241,11 @@ class VisualServoNode(Node):
         self._publish_state(aligned, target_valid)
 
     @staticmethod
-    def _assign_axis(message: TwistStamped, axis: str, value: float) -> None:
+    def _assign_axis(
+        message: TwistStamped,
+        axis: str,
+        value: float,
+    ) -> None:
         if axis == 'x':
             message.twist.linear.x = value
         elif axis == 'y':
@@ -217,6 +261,7 @@ class VisualServoNode(Node):
 
 
 def main(args=None) -> None:
+    """Run the visual servo node."""
     rclpy.init(args=args)
     node = VisualServoNode()
     try:
