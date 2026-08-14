@@ -1,5 +1,3 @@
-import pytest
-
 from da_daka_control.visual_servo_node import compute_visual_velocity
 
 
@@ -38,4 +36,4 @@ def test_vertical_mapping_uses_configured_inversion() -> None:
     assert horizontal == 0.0
     assert vertical < 0.0
     assert not aligned
-    assert abs(vertical) <= pytest.approx(0.12)
+    assert abs(vertical) <= 0.12 + 1e-9
