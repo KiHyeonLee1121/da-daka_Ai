@@ -1,4 +1,4 @@
-"""ONNX Runtime detector with automatic CPU, CUDA, or DirectML execution."""
+"""ONNX Runtime detector with automatic CPU, CUDA, TensorRT, or DirectML execution."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from laptop_ai.detector_base import BaseDetector
 from laptop_ai.onnx_postprocess import postprocess_xyxy_score_class
 from laptop_ai.onnx_runner import OnnxInferenceRunner
 from laptop_ai.performance import (
+    configure_cuda_environment,
     create_onnx_provider_options,
     create_onnx_session_options,
 )
@@ -135,6 +136,9 @@ class OnnxDetector(BaseDetector):
             raise ValueError(
                 "only detector.output_format=xyxy_score_class is currently implemented"
             )
+
+        performance_config = performance or PerformanceConfig()
+        configure_cuda_environment(performance_config)
         try:
             import onnxruntime as ort
         except ImportError as exc:
@@ -145,7 +149,6 @@ class OnnxDetector(BaseDetector):
             ) from exc
 
         available = ort.get_available_providers()
-        performance_config = performance or PerformanceConfig()
         provider_options = create_onnx_provider_options(performance_config)
         providers, selected_provider, fallback = select_onnx_providers(
             config.execution_provider,
@@ -153,6 +156,11 @@ class OnnxDetector(BaseDetector):
             device_id=performance_config.onnx_device_id,
             provider_options=provider_options,
         )
+        if config.require_gpu and selected_provider == "CPUExecutionProvider":
+            raise RuntimeError(
+                "GPU inference is required but neither the requested NVIDIA/DirectML "
+                f"provider nor a GPU fallback is available. ORT providers={available}"
+            )
         if fallback:
             logger.warning(
                 "requested ONNX provider %s unavailable; using %s",
@@ -187,12 +195,13 @@ class OnnxDetector(BaseDetector):
         )
         logger.info(
             "ONNX runtime model=%s requested_provider=%s selected_provider=%s "
-            "providers=%s device_id=%d intra_threads=%s inter_threads=%s "
+            "providers=%s gpu_required=%s device_id=%d intra_threads=%s inter_threads=%s "
             "execution=%s graph_optimization=%s",
             model_path,
             config.execution_provider,
             selected_provider,
             self._session.get_providers(),
+            config.require_gpu,
             performance_config.onnx_device_id,
             performance_config.onnx_intra_op_threads or "auto",
             performance_config.onnx_inter_op_threads or "auto",
@@ -212,14 +221,19 @@ class OnnxDetector(BaseDetector):
             selected_provider=selected_provider,
             device_id=performance_config.onnx_device_id,
             use_io_binding=performance_config.onnx_use_io_binding,
+            enable_cuda_graph=(
+                performance_config.onnx_cuda_enable_graph
+                and selected_provider == "CUDAExecutionProvider"
+            ),
         )
         if self._runner.input_dtype not in {np.float32, np.float16}:
             raise ValueError(
                 "ONNX detector input must be tensor(float) or tensor(float16)"
             )
         logger.info(
-            "ONNX I/O binding mode=%s warmup_runs=%d",
+            "ONNX I/O binding mode=%s cuda_graph=%s warmup_runs=%d",
             self._runner.io_binding_mode,
+            self._runner.cuda_graph_enabled,
             performance_config.onnx_warmup_runs,
         )
         warmup_tensor = np.zeros(
