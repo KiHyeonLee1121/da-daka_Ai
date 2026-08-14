@@ -2,15 +2,21 @@
 
 ## Scope
 
-This layer is intentionally **outside the flight-control path**. It must not send
-MAVLink, MAVROS setpoints, PX4 mode changes, Arm/Takeoff, or spray commands.
-`mission_manager`, `distance_controller`, PX4 failsafes, and QGroundControl
-priority remain unchanged.
+This layer is intentionally **outside the flight-control and spray-decision path**.
+It must not send MAVLink, MAVROS setpoints, PX4 mode changes, Arm/Takeoff, or spray
+commands. Its job is only to choose an efficient video/AI profile while preserving
+the same downstream target-coordinate contract.
 
-The current laptop-AI branch already creates the two resource stages needed by
-Pendulum: Pi-to-laptop video streaming is the network stage, and laptop detector
-inference is the compute stage. The new code adds a safe optimization control
-plane around those stages without coupling it to flight safety.
+The cleaning control path is documented separately in
+`docs/e2e_cleaning_pipeline.md`:
+
+```text
+panel detection -> dirt detection -> normalized target coordinate
+-> Pi visual servo -> LiDAR distance control -> stop verification -> spray request
+```
+
+Pendulum may change bitrate/model settings used before the coordinate is produced,
+but the Pi control nodes do not depend on Pendulum internals.
 
 ## Mapping from Pendulum to DA-DAKA
 
@@ -33,15 +39,13 @@ less state and lower integration risk.
 ## Deployed compute target
 
 The laptop inference target is Linux + NVIDIA GeForce RTX 5060 class hardware.
-The production-oriented configuration is
-`laptop_ai/config/linux_rtx5060.yaml`, documented in
-`docs/linux_rtx5060_gpu.md`.
+The production-oriented configuration is `laptop_ai/config/linux_rtx5060.yaml`,
+documented in `docs/linux_rtx5060_gpu.md`.
 
-The scheduler must not infer compute cost from GPU marketing specifications.
-Each detector profile's `inference_ms` is measured on the deployed laptop using
-its actual CUDA/TensorRT provider, FP16 model, preprocessing path, and warm cache.
-This keeps Pendulum's demand curve tied to the real end-to-end system rather than
-a synthetic GPU capacity estimate.
+The scheduler must not infer compute cost from GPU marketing specifications. Each
+detector profile's `inference_ms` is measured on the deployed laptop using its
+actual CUDA/TensorRT provider, FP16 model, preprocessing path, and warm cache. This
+keeps the demand curve tied to the real system.
 
 ## Files
 
@@ -54,23 +58,23 @@ a synthetic GPU capacity estimate.
 - `laptop_ai/laptop_ai/optimizer_cli.py`: evaluate a profiled curve without
   starting video inference.
 - `laptop_ai/config/pendulum_optimization.yaml`: disabled example configuration.
-- `laptop_ai/config/linux_rtx5060.yaml`: Linux NVIDIA production inference
-  profile with GPU-required CUDA execution, device-buffer reuse, and CUDA Graph.
+- `laptop_ai/config/linux_rtx5060.yaml`: Linux NVIDIA production inference profile.
 
 ## Safety and integrity rules
 
 1. Optimization is disabled by default.
 2. Example accuracy values are deliberately `0.0`; they are not field data and
    cannot satisfy the default minimum-accuracy requirement.
-3. `observe` mode only produces a recommendation/log. It does not reconfigure
-   the stream or detector.
+3. `observe` mode only produces a recommendation/log. It does not reconfigure the
+   stream or detector.
 4. `apply` mode may only be connected to AI/encoder adapters after bench tests.
-   It still must not be connected to PX4/MAVROS or Mission Manager mode changes.
-5. Simultaneous network+compute bottlenecks return an explicit best-effort
+5. The optimizer must never connect to Pixhawk/MAVROS, Mission Manager state
+   transitions, visual-servo velocity output, or the spray service.
+6. Simultaneous network+compute bottlenecks return an explicit best-effort
    decision; the optimizer does not claim an accuracy guarantee in that state.
-6. Detector-model accuracy and bitrate profiles must be measured on the actual
-   dirt dataset and acrylic/solar-panel scene conditions before live use.
-7. The RTX production profile uses `require_gpu: true`; loss of the CUDA provider
+7. Detector-model accuracy and bitrate profiles must be measured on the actual
+   dirt dataset and panel scene conditions before live use.
+8. The RTX production profile uses `require_gpu: true`; loss of the CUDA provider
    is a startup failure instead of a silent CPU fallback.
 
 ## Profiling workflow
@@ -100,13 +104,11 @@ python -m laptop_ai.optimizer_cli \
 
 ## What is deliberately not connected yet
 
-The branch documents but does not yet contain the Raspberry Pi camera stream
-producer/encoder control endpoint. Because of that, this change does **not**
-pretend to alter H.264 bitrate at runtime. The scheduler output includes an
-`encoder_profile` identifier so the future single stream producer can implement
-that adapter without changing the optimizer or flight-control packages.
+The branch does not yet contain a Raspberry Pi runtime encoder-control endpoint,
+so the optimizer does not pretend to alter H.264 bitrate live. The scheduler
+output carries an `encoder_profile` identifier for a future adapter.
 
-Likewise, model switching should be wired through a laptop-only detector pool
-after the real ONNX model set exists. The optimizer already carries detector
-backend, model path, and input dimensions in each demand point, but observe mode
-keeps the current detector untouched.
+Likewise, live light/medium/heavy model switching should be added only after the
+real ONNX model set has been validated. Neither future adapter should change the
+E2E control contract: the control side continues to receive only validated target
+coordinates and freshness metadata.
