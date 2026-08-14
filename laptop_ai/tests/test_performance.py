@@ -55,18 +55,26 @@ def test_directml_session_options_force_supported_execution_settings() -> None:
     assert not options.enable_mem_pattern
 
 
-def test_gpu_provider_options_enable_caches_and_safe_cuda_copy() -> None:
+def test_gpu_provider_options_enable_linux_nvidia_tuning() -> None:
     options = create_onnx_provider_options(
         PerformanceConfig(
             onnx_device_id=2,
             onnx_cuda_prefer_nhwc=True,
+            onnx_cuda_enable_graph=True,
+            onnx_cuda_use_tf32=True,
+            onnx_cuda_arena_extend_strategy="kNextPowerOfTwo",
+            onnx_cuda_cudnn_conv_algo_search="EXHAUSTIVE",
             onnx_tensorrt_cache_path=".runtime/test-cache",
         )
     )
     assert options["CUDAExecutionProvider"] == {
         "device_id": "2",
         "do_copy_in_default_stream": "1",
+        "arena_extend_strategy": "kNextPowerOfTwo",
+        "cudnn_conv_algo_search": "EXHAUSTIVE",
         "cudnn_conv_use_max_workspace": "1",
+        "enable_cuda_graph": "1",
+        "use_tf32": "1",
         "prefer_nhwc": "1",
     }
     assert options["TensorrtExecutionProvider"]["trt_fp16_enable"] == "1"
