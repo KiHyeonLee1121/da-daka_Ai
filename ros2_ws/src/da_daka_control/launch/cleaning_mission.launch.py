@@ -77,9 +77,15 @@ def generate_launch_description() -> LaunchDescription:
                 output='screen',
                 parameters=[
                     config('distance_mission.yaml'),
-                    # target_reached already requires a long distance settle; keep
-                    # OFFBOARD active long enough for stop verification + spray RPC.
+                    # Combined target already includes long LiDAR settling plus
+                    # current visual alignment. Keep OFFBOARD alive for the final
+                    # stop verification and spray RPC.
                     {'target_hold_confirm_duration': 1.5, 'target_hold_timeout': 4.0},
+                ],
+                # Preserve the legacy mission-manager code: only the cleaning
+                # launch remaps its target input to the stricter combined target.
+                remappings=[
+                    ('/distance_control/target_reached', '/cleaning/target_reached'),
                 ],
             ),
         ]
