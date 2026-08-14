@@ -1,0 +1,89 @@
+# DA-DAKA production-oriented laptop AI profile for Linux + NVIDIA GeForce RTX 5060.
+# The official NVIDIA product name is RTX 5060; this profile also applies to a
+# laptop variant after validating the actual GPU/driver with nvidia-smi.
+
+video:
+  # Replace with the Raspberry Pi stream endpoint used on the field network.
+  backend: "gstreamer"
+  source: "udpsrc port=5600 caps=application/x-rtp,media=video,encoding-name=H264,payload=96 ! rtpjitterbuffer latency=20 drop-on-latency=true ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1 sync=false"
+  reconnect_interval_s: 1.0
+  max_consecutive_failures: 30
+  frame_width: 640
+  frame_height: 480
+  process_every_n_frames: 1
+  max_frame_age_s: 0.35
+  capture_buffer_size: 1
+
+detector:
+  backend: "onnx"
+  # Supply the validated dirt model locally; model binaries are not committed.
+  model_path: "models/dirt_detector.fp16.onnx"
+  # CUDA is the deterministic production default for this profile. TensorRT can
+  # be benchmarked separately and selected after its engine/cache compatibility
+  # is verified on the deployed machine.
+  execution_provider: "cuda"
+  require_gpu: true
+  confidence_threshold: 0.5
+  input_width: 640
+  input_height: 640
+  class_id: 0
+  output_format: "xyxy_score_class"
+  coordinates_normalized: false
+  min_area: 80
+  max_area: 50000
+  threshold_mode: "adaptive"
+  reject_specular_highlights: true
+  specular_v_threshold: 245
+  specular_saturation_max: 45
+  ignore_border_px: 4
+  priority_w_area: 0.45
+  priority_w_dist: 0.25
+  priority_w_conf: 0.30
+
+network:
+  destination_host: "192.168.0.20"
+  destination_port: 5005
+  source_id: "laptop-ai-01"
+  send_no_detection: true
+  heartbeat_interval_s: 0.2
+  max_packet_bytes: 4096
+
+debug:
+  show_window: false
+  save_video: false
+  log_level: "INFO"
+  summary_interval_s: 5.0
+
+performance:
+  # Keep CPU work bounded so capture/preprocess does not compete with the control
+  # and network threads. Re-benchmark this count on the actual laptop CPU.
+  opencv_num_threads: 2
+  opencv_use_opencl: false
+  opencv_use_optimized: true
+
+  # GPU EPs do the heavy work; keep ORT CPU thread pools small and predictable.
+  onnx_intra_op_threads: 1
+  onnx_inter_op_threads: 1
+  onnx_execution_mode: "sequential"
+  onnx_graph_optimization: "all"
+  onnx_enable_cpu_mem_arena: true
+  onnx_device_id: 0
+
+  # First frames capture/warm the CUDA graph and allocator state before field use.
+  onnx_warmup_runs: 20
+  onnx_use_io_binding: true
+  onnx_cuda_enable_graph: true
+  onnx_cuda_conv_use_max_workspace: true
+  onnx_cuda_cudnn_conv_algo_search: "EXHAUSTIVE"
+  onnx_cuda_arena_extend_strategy: "kNextPowerOfTwo"
+  onnx_cuda_use_tf32: true
+  # Leave false until a real dirt model benchmark proves NHWC wins after layout
+  # conversion cost; the exported detector is expected to be NCHW by default.
+  onnx_cuda_prefer_nhwc: false
+  cuda_module_loading_lazy: true
+
+  # Retained for an optional TensorRT profile. CUDA remains the default above.
+  onnx_tensorrt_fp16: true
+  onnx_tensorrt_engine_cache: true
+  onnx_tensorrt_timing_cache: true
+  onnx_tensorrt_cache_path: ".runtime/onnx-tensorrt-rtx5060"
