@@ -1,4 +1,4 @@
-"""Expose a gated spray trigger service with dry-run as the safe default."""
+"""Expose a dry-run spray trigger service as a safe integration point."""
 
 import json
 import time
@@ -12,7 +12,7 @@ from std_srvs.srv import Trigger
 
 
 class SprayControllerNode(Node):
-    """Own the spray command endpoint without pretending an unknown HW mapping exists."""
+    """Own the spray endpoint without inventing an unknown hardware mapping."""
 
     def __init__(self) -> None:
         super().__init__('spray_controller')
@@ -22,23 +22,29 @@ class SprayControllerNode(Node):
         self.declare_parameter('pulse_duration_s', 0.30)
         self.declare_parameter('dry_run', True)
         self.declare_parameter('backend', 'dry_run')
-        self._service_topic = str(self.get_parameter('service_topic').value)
+        self._service_topic = str(
+            self.get_parameter('service_topic').value
+        )
         active_topic = str(self.get_parameter('active_topic').value)
         event_topic = str(self.get_parameter('event_topic').value)
-        self._pulse_duration_s = float(self.get_parameter('pulse_duration_s').value)
+        self._pulse_duration_s = float(
+            self.get_parameter('pulse_duration_s').value
+        )
         self._dry_run = bool(self.get_parameter('dry_run').value)
         self._backend = str(self.get_parameter('backend').value).lower()
         if not 0.05 <= self._pulse_duration_s <= 2.0:
-            raise ValueError('pulse_duration_s must be within [0.05, 2.0]')
+            raise ValueError(
+                'pulse_duration_s must be within [0.05, 2.0]'
+            )
         if self._backend not in {'dry_run'}:
             raise ValueError(
-                'only backend=dry_run is implemented; configure the real relay/servo '
-                'mapping before enabling physical spray'
+                'only backend=dry_run is implemented; configure the real '
+                'relay/servo mapping before enabling physical spray'
             )
         if not self._dry_run:
             raise ValueError(
-                'physical spray is fail-closed because the Pixhawk relay/servo mapping '
-                'is not defined in this repository'
+                'physical spray is fail-closed because the Pixhawk '
+                'relay/servo mapping is not defined in this repository'
             )
 
         latched_qos = QoSProfile(
@@ -46,12 +52,25 @@ class SprayControllerNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self._active_publisher = self.create_publisher(Bool, active_topic, latched_qos)
-        self._event_publisher = self.create_publisher(String, event_topic, latched_qos)
-        self._service = self.create_service(Trigger, self._service_topic, self._trigger)
+        self._active_publisher = self.create_publisher(
+            Bool,
+            active_topic,
+            latched_qos,
+        )
+        self._event_publisher = self.create_publisher(
+            String,
+            event_topic,
+            latched_qos,
+        )
+        self._service = self.create_service(
+            Trigger,
+            self._service_topic,
+            self._trigger,
+        )
         self._active_publisher.publish(Bool(data=False))
         self.get_logger().info(
-            f'Spray controller ready in DRY-RUN mode; service={self._service_topic}'
+            'Spray controller ready in DRY-RUN mode; service='
+            f'{self._service_topic}'
         )
 
     def _trigger(
@@ -72,7 +91,8 @@ class SprayControllerNode(Node):
         )
         self._active_publisher.publish(Bool(data=False))
         self.get_logger().info(
-            f'[DRY-RUN] spray pulse accepted duration={self._pulse_duration_s:.3f}s'
+            '[DRY-RUN] spray pulse accepted '
+            f'duration={self._pulse_duration_s:.3f}s'
         )
         response.success = True
         response.message = (
@@ -83,6 +103,7 @@ class SprayControllerNode(Node):
 
 
 def main(args=None) -> None:
+    """Run the spray controller node."""
     rclpy.init(args=args)
     node = SprayControllerNode()
     try:
