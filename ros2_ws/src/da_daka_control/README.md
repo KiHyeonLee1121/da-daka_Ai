@@ -1,25 +1,67 @@
-# DA-DAKA Raspberry Pi 거리제어 패키지
+# DA-DAKA Raspberry Pi 제어 패키지
 
-이 디렉토리는 기존 VM의 `da_daka_control`을 보존한 채 Raspberry Pi 5
-탑재 구조로 이전하기 위해 만든 검증용 ROS 2 패키지다. 저장소에서는
-`ros2_ws/src/da_daka_control`에 위치한다.
+이 디렉토리는 Raspberry Pi 5에서 센서, PX4/MAVROS, 노트북 AI 결과를
+통합하는 ROS 2 패키지다. 저장소에서는 `ros2_ws/src/da_daka_control`에
+위치한다.
 
 ## 명령권 원칙
 
-- 비행 중 OFFBOARD setpoint 발행자는 이 패키지의 거리제어 노드 하나다.
 - 전체 비행 순서는 `mission_manager` 하나만 관리한다.
-- 거리제어 노드는 PX4 모드를 변경하거나 스스로 비활성화하지 않는다.
-  `target_reached`만 발행하고, Mission Manager가 AUTO.LOITER를 확인한
-  뒤 `/distance_control/enable`을 `false`로 전환한다.
-- AI 노드와 분사 노드는 직접 MAVLink 비행 명령을 발행하지 않는다.
-- 노트북 AI UDP receiver는 검증된 typed detection과 health 상태만 발행한다.
-- 대시보드는 실제 명령 연동을 검증하기 전까지 읽기 전용으로 둔다.
-- QGC/RC/PX4가 OFFBOARD를 해제하면 Mission Manager는 해당 모드를
-  우선하고 OFFBOARD로 재진입하지 않는다.
+- 기존 `distance_mission.launch.py`에서는 `distance_controller`가
+  `/mavros/setpoint_velocity/cmd_vel`의 유일한 발행자다.
+- 청소용 `cleaning_mission.launch.py`에서는 `distance_controller`가 Z축
+  중간 명령만 `/distance_control/cmd_vel_z`로 발행하고,
+  `visual_servo`가 XY 중간 명령만 `/visual_servo/cmd_vel_xy`로 발행한다.
+- 청소 모드의 실제 MAVROS velocity setpoint는 `control_command_mixer`
+  하나만 발행한다. 두 제어기가 같은 MAVROS topic에 경쟁해서 쓰지 않는다.
+- 노트북 AI는 비행 명령이나 분사 명령을 보내지 않는다. 검증 대상이 되는
+  오염 중심좌표, bbox, confidence, freshness 정보만 Pi로 보낸다.
+- Pendulum 최적화 계층은 bitrate/AI profile 선택에만 관여하며 PX4, visual
+  servo, Mission Manager, spray service에 연결하지 않는다.
+- QGC/RC/PX4가 OFFBOARD를 해제하면 Mission Manager는 해당 모드를 우선하고
+  OFFBOARD로 재진입하지 않는다.
+
+## 청소 E2E 경로
+
+```text
+노트북 RTX 5060
+panel ROI -> dirt detection -> normalized coordinate
+                         |
+                         v UDP
+Raspberry Pi
+ai_result_receiver
+ -> visual_servo (XY)
+ -> distance_controller (LiDAR Z)
+ -> control_command_mixer
+ -> MAVROS / Pixhawk
+ -> /cleaning/target_reached
+ -> 실제 기체 저속/정지 확인
+ -> /spray/trigger
+ -> /cleaning/complete
+ -> Mission Manager 종료/착륙 단계
+```
+
+`/cleaning/target_reached`는 **분사 직전 위치 조건**이다. AI target이 현재
+유효하고 화면 중앙에 정렬되어 있으며 LiDAR 거리 목표가 안정적으로 유지될
+때만 true다.
+
+`cleaning_coordinator`는 여기에 MAVROS가 보고한 실제 기체 속도까지 확인한다.
+설정된 정지시간 동안 조건이 유지되면 `/spray/trigger`를 한 번 요청한다.
+Spray service가 성공한 뒤에만 `/cleaning/complete=true`가 된다.
+
+청소 launch에서는 Mission Manager의 기존
+`/distance_control/target_reached` 입력을 `/cleaning/complete`로 remap한다.
+따라서 위치만 맞고 분사 단계가 실패한 상태를 미션 성공으로 처리하지 않는다.
+기존 `mission_manager_node.py`와 `distance_mission.launch.py`는 그대로 보존된다.
+
+현재 저장소에는 실제 Pixhawk relay/servo/PWM 분사 출력 mapping이 정의되어
+있지 않다. 따라서 `spray_controller`는 의도적으로 dry-run 전용이며, 실제
+하드웨어 mapping을 확인하고 bench test하기 전에는 물리 분사를 활성화하지
+않는다.
 
 ## ROS 인터페이스
 
-입력:
+센서/비행 입력:
 
 - `/distance/raw` (`sensor_msgs/msg/Range`)
 - `/mavros/state`
@@ -27,23 +69,31 @@
 - `/mavros/local_position/pose`
 - `/mavros/local_position/velocity_local`
 
-주요 서비스와 상태:
+AI 입력과 중간 상태:
+
+- `/ai/detection_result` (`da_daka_interfaces/msg/DirtDetection`)
+- `/ai/health` (`std_msgs/msg/Bool`)
+- `/ai/receiver_state` (`std_msgs/msg/String`)
+- `/visual_servo/cmd_vel_xy`
+- `/visual_servo/aligned`
+- `/visual_servo/target_valid`
+- `/distance_control/cmd_vel_z`
+- `/distance_control/target_reached`
+- `/cleaning/target_reached`
+- `/cleaning/state`
+- `/cleaning/complete`
+
+주요 서비스:
 
 - `/mission/start` (`std_srvs/srv/Trigger`)
 - `/mission/abort` (`std_srvs/srv/Trigger`)
 - `/distance_control/enable` (`std_srvs/srv/SetBool`)
-- `/mission/state`
-- `/mission/result`
-- `/distance_control/enabled`
-- `/distance_control/target_reached`
-- `/ai/detection_result` (`da_daka_interfaces/msg/DirtDetection`)
-- `/ai/health` (`std_msgs/msg/Bool`)
-- `/ai/receiver_state` (`std_msgs/msg/String` JSON, 향후 Mission Manager 통합 지점)
+- `/spray/trigger` (`std_srvs/srv/Trigger`, 현재 dry-run)
 
 ## 노트북 AI 결과 수신
 
-아래 launch는 UDP 수신과 상태 topic만 시작한다. 자동 Arm, 이륙, OFFBOARD,
-Loiter, Land 또는 분사를 요청하지 않는다.
+AI receiver만 검증할 때는 다음 launch를 사용한다. 이 launch는 자동 Arm,
+이륙, OFFBOARD, Loiter, Land 또는 분사를 요청하지 않는다.
 
 ```bash
 ros2 launch da_daka_control ai_result_receiver.launch.py
@@ -55,7 +105,6 @@ ros2 topic echo /ai/receiver_state
 기본 UDP 포트는 5005, 허용 source ID는 `laptop-ai-01`, stale timeout은
 0.4초, heartbeat timeout은 1.0초다. 노트북과 Pi clock이 동기화됐다고
 가정하지 않으므로 기본 freshness는 Pi local monotonic 수신 시각을 사용한다.
-상세 schema와 네트워크 설정은 `docs/laptop_ai_architecture.md`를 참고한다.
 
 ## 빌드
 
@@ -76,15 +125,14 @@ colcon test-result --verbose
 
 1. Pixhawk Serial은 `mavlink-router` 하나만 점유한다.
 2. Raspberry Pi 내부 MAVROS가 router의 로컬 UDP endpoint에 연결된다.
-3. Windows QGC가 router의 원격 UDP endpoint로 텔레메트리를 수신한다.
-4. `tf_luna_serial` 노드가 실제 TF-Luna의 9-byte 프레임을 검증하고
-   `/distance/raw`를 meter 단위로 발행한다.
+3. QGC가 router의 원격 endpoint로 텔레메트리를 수신한다.
+4. `tf_luna_serial`이 실제 TF-Luna frame을 검증하고 `/distance/raw`를 meter
+   단위로 발행한다.
 5. 거리제어는 꺼진 상태여야 한다.
 6. 기체는 Disarm 상태여야 한다.
 7. 처음에는 프로펠러를 제거하고 인터페이스만 검증한다.
 
-TF-Luna 드라이버는 별도 launch로 실행하며, 이 노드만 TF-Luna Serial
-장치를 점유해야 한다.
+TF-Luna 드라이버는 별도 launch로 실행한다.
 
 ```bash
 ros2 launch da_daka_control tf_luna_serial.launch.py
@@ -92,12 +140,16 @@ ros2 topic hz /distance/raw
 ros2 topic echo --once /distance/raw
 ```
 
-MAVROS와 TF-Luna 연결이 정상임을 먼저 확인한 다음 제어 패키지를 실행한다.
+기존 거리제어만 시험할 때:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source <da-daka_Ai 저장소 경로>/ros2_ws/install/setup.bash
 ros2 launch da_daka_control distance_mission.launch.py
+```
+
+AI 좌표까지 포함한 청소 E2E 경로를 시험할 때:
+
+```bash
+ros2 launch da_daka_control cleaning_mission.launch.py
 ```
 
 ## 시작과 중단
@@ -110,14 +162,15 @@ ros2 service call /mission/start std_srvs/srv/Trigger "{}"
 ros2 service call /mission/abort std_srvs/srv/Trigger "{}"
 ```
 
-상태 확인:
+청소 상태 확인:
 
 ```bash
 ros2 topic echo /mission/state
-ros2 topic echo /mission/result
-ros2 topic echo --once /mavros/state
-ros2 topic hz /distance/raw
-ros2 topic hz /distance/filtered
+ros2 topic echo /ai/health
+ros2 topic echo /visual_servo/aligned
+ros2 topic echo /cleaning/target_reached
+ros2 topic echo /cleaning/state
+ros2 topic echo /cleaning/complete
 ```
 
 ## 거리제어 기준
@@ -128,12 +181,11 @@ ros2 topic hz /distance/filtered
 - 센서 timeout: 0.3 s
 - 상태 텔레메트리 timeout: 2.0 s
 - 시작 최소 배터리: 30%
-- 시작 시 PX4 착륙 상태와 활성 센서 health 확인
 - 목표 판정: 오차 ±0.08 m, 수직속도 0.05 m/s 이하, 연속 5 s
 - 전체 거리제어 timeout: 20 s
 
 ±0.08 m는 VM/SITL에서 마지막으로 검증된 값이다. 실제 TF-Luna 로그를
-확인한 뒤 좁히거나 넓혀야 하며, 검증 없이 당일 임의 변경하지 않는다.
+확인한 뒤 조정해야 한다.
 
 ## QGC/RC 외부 개입
 
@@ -143,12 +195,12 @@ ros2 topic hz /distance/filtered
 2. Mission Manager를 ABORT로 전환한다.
 3. 확인된 외부 모드를 다시 바꾸지 않는다.
 4. OFFBOARD로 재진입하지 않는다.
-5. 비-OFFBOARD 모드를 확인한 뒤 거리 setpoint를 중단한다.
+5. 비-OFFBOARD 모드를 확인한 뒤 제어 setpoint를 중단한다.
 6. QGC/RC/PX4가 이후 복구와 착륙의 명령권을 가진다.
 
-내부 센서 오류가 발생했고 PX4가 여전히 OFFBOARD라면, 기존과 같이
-setpoint stream을 유지하면서 AUTO.LAND를 요청하고 실제 모드 전환을
-확인한 뒤 거리제어를 끈다.
+내부 센서 오류가 발생했고 PX4가 여전히 OFFBOARD라면 기존과 같이 setpoint
+stream을 유지하면서 AUTO.LAND를 요청하고 실제 모드 전환을 확인한 뒤 제어를
+끈다.
 
 ## 로그
 
@@ -158,19 +210,13 @@ setpoint stream을 유지하면서 AUTO.LAND를 요청하고 실제 모드 전�
 ~/da_daka_logs/distance_mission/distance_mission_YYYYMMDD_HHMMSS_ffffff.csv
 ```
 
-외부 모드 개입 여부와 개입 모드도 CSV에 기록한다.
-
-```bash
-latest=$(ls -t ~/da_daka_logs/distance_mission/*.csv | head -1)
-tail -20 "$latest"
-```
-
 ## 실기체 이전 전 제한
 
-- Raspberry Pi 운영체제와 ROS 2 설치 상태는 아직 이 VM에서 검증할 수 없다.
-- 실제 Pixhawk serial 장치와 baud는 Raspberry Pi에서 확인해야 한다.
-- 실제 TF-Luna parser는 9-byte 프레임, checksum, meter 변환을 수행한다.
-  실제 표면별 신호 세기와 거리 안정성은 Raspberry Pi에서 확인해야 한다.
+- 실제 RTX 5060 inference latency와 모델 정확도는 배포 노트북에서 측정해야
+  한다.
+- 카메라 장착방향에 따른 visual-servo x/y axis와 부호는 프로펠러 제거 상태로
+  검증해야 한다.
+- Raspberry Pi의 실제 Pixhawk serial 장치와 baud를 확인해야 한다.
+- TF-Luna의 표면별 신호 세기와 거리 안정성을 실제 패널에서 확인해야 한다.
 - PX4 OFFBOARD-loss, RC-loss, 데이터링크-loss 설정은 별도 시험이 필요하다.
-- QGC만 Pi를 경유하면 Pi 전원 장애 시 QGC도 끊긴다. 독립 RC 또는
-  Pixhawk 직결 비상 링크가 필요하다.
+- 실제 분사 actuator mapping은 아직 정의되지 않았으므로 dry-run을 유지한다.
