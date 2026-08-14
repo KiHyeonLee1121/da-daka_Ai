@@ -1,0 +1,24 @@
+survey_reposition:
+  ros__parameters:
+    # Per-test operator approval. Do not enable this persistently.
+    configuration_approved: false
+
+    target_topic: /survey/panel_target_local
+    target_frame_id: map
+    maximum_target_age_s: 30.0
+    telemetry_timeout_s: 0.5
+
+    maximum_horizontal_displacement_m: 4.0
+    maximum_horizontal_speed_mps: 0.20
+    maximum_vertical_drift_m: 0.40
+    arrival_tolerance_m: 0.20
+    arrival_max_speed_mps: 0.10
+    arrival_stable_s: 2.0
+
+    prestream_s: 2.0
+    offboard_wait_timeout_s: 30.0
+    # Recover the yaw captured with the survey image before translating.
+    yaw_alignment_tolerance_deg: 5.0
+    yaw_alignment_stable_s: 0.5
+    yaw_alignment_timeout_s: 10.0
+    tick_rate_hz: 20.0

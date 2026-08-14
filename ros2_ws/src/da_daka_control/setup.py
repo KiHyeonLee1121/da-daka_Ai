@@ -45,6 +45,8 @@ setup(
             'da_daka_control.control_command_mixer:main',
             'spray_controller = da_daka_control.spray_controller_node:main',
             'cleaning_coordinator = da_daka_control.cleaning_coordinator:main',
+            'survey_reposition = '
+            'da_daka_control.survey_reposition_node:main',
         ],
     },
 )

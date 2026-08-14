@@ -20,6 +20,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Optional
 
@@ -100,34 +101,78 @@ def capture_frame(
     height: int,
     camera_index: int,
     output_path: Path,
+    shutter_us: int,
+    burst_count: int,
+    burst_interval_ms: int,
 ) -> np.ndarray:
-    """Capture using rpicam-still, Picamera2, or OpenCV."""
+    """Capture sharp single frames and retain the sharpest one.
+
+    Frames are never averaged or blended.  A short exposure reduces motion
+    blur, while ZSL keeps rpicam-still in one sensor mode during the burst.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    rpicam = shutil.which('rpicam-still')
+    repository_proxy = REPO_ROOT / 'tools' / 'rpicam-still-proxy'
+    rpicam = (
+        str(repository_proxy)
+        if repository_proxy.is_file() and repository_proxy.stat().st_mode & 0o111
+        else shutil.which('rpicam-still')
+    )
     if rpicam:
-        result = subprocess.run(
-            [
-                rpicam,
-                '--nopreview',
-                '--timeout',
-                '500',
-                '--width',
-                str(width),
-                '--height',
-                str(height),
-                '--output',
-                str(output_path),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            frame = cv2.imread(str(output_path), cv2.IMREAD_COLOR)
-            if frame is not None:
-                return frame
+        # ZSL begins producing stills after roughly 300 ms of camera warm-up.
+        timeout_ms = 300 + burst_count * burst_interval_ms
+        with tempfile.TemporaryDirectory(prefix='da_daka_camera_burst_') as tmp:
+            frame_pattern = Path(tmp) / 'frame%03d.jpg'
+            result = subprocess.run(
+                [
+                    rpicam,
+                    '--nopreview',
+                    '--timeout',
+                    str(timeout_ms),
+                    '--timelapse',
+                    str(burst_interval_ms),
+                    '--zsl',
+                    '--shutter',
+                    str(shutter_us),
+                    '--denoise',
+                    'cdn_fast',
+                    '--autofocus-mode',
+                    'continuous',
+                    '--width',
+                    str(width),
+                    '--height',
+                    str(height),
+                    '--output',
+                    str(frame_pattern),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode == 0:
+                frames = [
+                    frame
+                    for path in sorted(Path(tmp).glob('frame*.jpg'))
+                    if (frame := cv2.imread(str(path), cv2.IMREAD_COLOR))
+                    is not None
+                ]
+                if frames:
+                    frame, selected, score = select_sharpest_frame(frames)
+                    cv2.imwrite(str(output_path), frame)
+                    if Path(rpicam).name == 'rpicam-still-proxy':
+                        print(
+                            '[CAMERA] host proxy selected one frame from the '
+                            'high-speed burst; '
+                            f'sharpness={score:.1f}, shutter={shutter_us}us'
+                        )
+                    else:
+                        print(
+                            '[CAMERA] high-speed single-frame burst: '
+                            f'selected {selected + 1}/{len(frames)}, '
+                            f'sharpness={score:.1f}, shutter={shutter_us}us'
+                        )
+                    return frame
 
     try:
         from picamera2 import Picamera2
@@ -140,11 +185,20 @@ def capture_frame(
         )
         camera.start()
         time.sleep(0.7)
-        rgb = camera.capture_array()
+        frames = []
+        for _ in range(burst_count):
+            frames.append(
+                cv2.cvtColor(camera.capture_array(), cv2.COLOR_RGB2BGR)
+            )
+            time.sleep(burst_interval_ms / 1000.0)
         camera.stop()
         camera.close()
-        frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        frame, selected, score = select_sharpest_frame(frames)
         cv2.imwrite(str(output_path), frame)
+        print(
+            '[CAMERA] Picamera2 single-frame burst: '
+            f'selected {selected + 1}/{len(frames)}, sharpness={score:.1f}'
+        )
         return frame
     except (ImportError, RuntimeError):
         pass
@@ -156,17 +210,50 @@ def capture_frame(
         )
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    frame = None
-    for _ in range(8):
+    frames = []
+    for _ in range(max(8, burst_count)):
         ok, candidate = capture.read()
         if ok:
-            frame = candidate
+            frames.append(candidate)
         time.sleep(0.04)
     capture.release()
-    if frame is None:
+    if not frames:
         raise RuntimeError('camera opened but returned no image')
+    frame, selected, score = select_sharpest_frame(frames[-burst_count:])
     cv2.imwrite(str(output_path), frame)
+    print(
+        '[CAMERA] OpenCV single-frame burst: '
+        f'selected {selected + 1}/{min(len(frames), burst_count)}, '
+        f'sharpness={score:.1f}'
+    )
     return frame
+
+
+def frame_sharpness(frame: np.ndarray) -> float:
+    """Score detail in the central 80 percent, away from vehicle hardware."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    height, width = gray.shape
+    roi = gray[height // 10 : 9 * height // 10, width // 10 : 9 * width // 10]
+    if roi.shape[1] > 960:
+        scale = 960.0 / roi.shape[1]
+        roi = cv2.resize(roi, None, fx=scale, fy=scale)
+    return float(cv2.Laplacian(roi, cv2.CV_64F).var())
+
+
+def select_sharpest_frame(
+    frames: list[np.ndarray],
+) -> tuple[np.ndarray, int, float]:
+    """Return one original frame; do not average or geometrically combine."""
+    if not frames:
+        raise ValueError('cannot select from an empty frame burst')
+    scores = [frame_sharpness(frame) for frame in frames]
+    selected = int(np.argmax(scores))
+    return frames[selected], selected, scores[selected]
+
+
+def orient_da_daka_camera_frame(frame: np.ndarray) -> np.ndarray:
+    """Rotate the installed DA-DAKA camera image into vehicle orientation."""
+    return cv2.rotate(frame, cv2.ROTATE_180)
 
 
 def detect_panel_candidates(
@@ -217,6 +304,57 @@ def detect_panel_candidates(
                 center_x=x + w / 2.0,
                 center_y=y + h / 2.0,
                 score=ratio * rectangularity,
+            )
+        )
+    candidates.sort(key=lambda item: item.score, reverse=True)
+    if candidates:
+        return candidates[:20]
+
+    # The small blue survey panel can occupy less than the generic rectangle
+    # threshold at 3 m.  Recover only isolated blue rectangles that do not
+    # touch an image edge; this rejects the blue court surrounding the frame.
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    blue = cv2.inRange(
+        hsv,
+        np.array([90, 55, 25], dtype=np.uint8),
+        np.array([135, 255, 230], dtype=np.uint8),
+    )
+    blue = cv2.morphologyEx(
+        blue,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (13, 13)),
+    )
+    blue_contours, _ = cv2.findContours(
+        blue,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    for contour in blue_contours:
+        area = float(cv2.contourArea(contour))
+        ratio = area / image_area
+        if not 0.002 <= ratio <= 0.08:
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        if x <= 2 or y <= 2 or x + w >= width - 2 or y + h >= height - 2:
+            continue
+        rotated = cv2.minAreaRect(contour)
+        rect_width, rect_height = rotated[1]
+        rect_area = rect_width * rect_height
+        if rect_area <= 0.0 or area / rect_area < 0.65:
+            continue
+        aspect = max(rect_width / rect_height, rect_height / rect_width)
+        if aspect > 3.0:
+            continue
+        center_x, center_y = rotated[0]
+        candidates.append(
+            PanelCandidate(
+                x=x,
+                y=y,
+                w=w,
+                h=h,
+                center_x=float(center_x),
+                center_y=float(center_y),
+                score=ratio * (area / rect_area),
             )
         )
     candidates.sort(key=lambda item: item.score, reverse=True)
@@ -308,6 +446,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--camera-index', type=int, default=0)
     parser.add_argument('--width', type=int, default=1920)
     parser.add_argument('--height', type=int, default=1080)
+    parser.add_argument(
+        '--camera-shutter-us',
+        type=int,
+        default=1000,
+        help='Short exposure for vibration/rolling-shutter mitigation',
+    )
+    parser.add_argument('--camera-burst-count', type=int, default=5)
+    parser.add_argument('--camera-burst-interval-ms', type=int, default=120)
     parser.add_argument('--panel-index', type=int, default=0)
     parser.add_argument('--center', type=parse_pair, help='Panel center X,Y pixels')
     parser.add_argument('--bbox', type=parse_bbox, help='Panel bbox X,Y,W,H pixels')
@@ -319,13 +465,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--reference-width-m', type=float, default=3.9)
     parser.add_argument('--reference-height-m', type=float, default=2.2)
     parser.add_argument('--approach-distance-m', type=float, default=1.0)
-    parser.add_argument('--camera-yaw-offset-deg', type=float, default=0.0)
+    parser.add_argument(
+        '--camera-yaw-offset-deg',
+        type=float,
+        default=0.0,
+        help='Residual yaw correction after the built-in 180deg image rotation',
+    )
     parser.add_argument('--invert-horizontal', action='store_true')
     parser.add_argument('--invert-vertical', action='store_true')
     parser.add_argument('--expected-survey-height-m', type=float, default=3.0)
     parser.add_argument('--survey-height-tolerance-m', type=float, default=0.40)
     parser.add_argument('--max-tilt-deg', type=float, default=7.0)
     parser.add_argument('--allow-tilt', action='store_true')
+    parser.add_argument('--max-capture-drift-m', type=float, default=0.15)
+    parser.add_argument(
+        '--max-capture-range-change-m',
+        type=float,
+        default=0.15,
+    )
 
     parser.add_argument('--pose-topic', default='/mavros/local_position/pose')
     parser.add_argument('--range-topic', default='/distance/filtered')
@@ -356,6 +513,13 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.width <= 0 or args.height <= 0:
         print('ERROR: image dimensions must be positive', file=sys.stderr)
+        return 2
+    if (
+        args.camera_shutter_us <= 0
+        or args.camera_burst_count <= 0
+        or args.camera_burst_interval_ms <= 0
+    ):
+        print('ERROR: camera capture settings must be positive', file=sys.stderr)
         return 2
     if not 0.0 < args.min_area_ratio < args.max_area_ratio <= 1.0:
         print('ERROR: invalid panel area ratio bounds', file=sys.stderr)
@@ -452,6 +616,8 @@ def main() -> int:
 
         pose = node.pose
         distance_m = node.distance_m
+        pose_time_before_capture = node.pose_time_s
+        range_time_before_capture = node.range_time_s
         orientation = pose.pose.orientation
         roll, pitch, yaw = quaternion_to_rpy(
             orientation.x,
@@ -486,7 +652,57 @@ def main() -> int:
                 height=args.height,
                 camera_index=args.camera_index,
                 output_path=survey_path,
+                shutter_us=args.camera_shutter_us,
+                burst_count=args.camera_burst_count,
+                burst_interval_ms=args.camera_burst_interval_ms,
             )
+        frame = orient_da_daka_camera_frame(frame)
+        cv2.imwrite(str(survey_path), frame)
+
+        # Drain telemetry queued during the camera burst.  The selected ZSL
+        # frame lies between these endpoints, so their midpoint is a closer
+        # synchronized estimate than reusing only the pre-capture pose.
+        telemetry_deadline = time.monotonic() + 0.25
+        while rclpy.ok() and time.monotonic() < telemetry_deadline:
+            rclpy.spin_once(node, timeout_sec=0.02)
+        if (
+            node.pose is None
+            or node.distance_m is None
+            or node.pose_time_s is None
+            or node.range_time_s is None
+            or node.pose_time_s == pose_time_before_capture
+            or node.range_time_s == range_time_before_capture
+        ):
+            raise RuntimeError('fresh post-capture telemetry was unavailable')
+
+        post_pose = node.pose
+        post_distance_m = node.distance_m
+        capture_drift_m = math.hypot(
+            float(post_pose.pose.position.x - pose.pose.position.x),
+            float(post_pose.pose.position.y - pose.pose.position.y),
+        )
+        capture_range_change_m = abs(post_distance_m - distance_m)
+        if capture_drift_m > args.max_capture_drift_m:
+            raise RuntimeError(
+                f'capture XY drift {capture_drift_m:.3f}m exceeds '
+                f'{args.max_capture_drift_m:.3f}m; discard this frame'
+            )
+        if capture_range_change_m > args.max_capture_range_change_m:
+            raise RuntimeError(
+                f'capture LiDAR change {capture_range_change_m:.3f}m exceeds '
+                f'{args.max_capture_range_change_m:.3f}m; discard this frame'
+            )
+
+        capture_east_m = 0.5 * (
+            float(pose.pose.position.x) + float(post_pose.pose.position.x)
+        )
+        capture_north_m = 0.5 * (
+            float(pose.pose.position.y) + float(post_pose.pose.position.y)
+        )
+        capture_up_m = 0.5 * (
+            float(pose.pose.position.z) + float(post_pose.pose.position.z)
+        )
+        distance_m = 0.5 * (distance_m + post_distance_m)
 
         candidates = detect_panel_candidates(
             frame,
@@ -506,9 +722,9 @@ def main() -> int:
         )
 
         target = build_panel_target(
-            capture_east_m=float(pose.pose.position.x),
-            capture_north_m=float(pose.pose.position.y),
-            capture_up_m=float(pose.pose.position.z),
+            capture_east_m=capture_east_m,
+            capture_north_m=capture_north_m,
+            capture_up_m=capture_up_m,
             yaw_enu_rad=yaw,
             lidar_distance_m=distance_m,
             panel_pixel_x=center_x,
@@ -527,11 +743,23 @@ def main() -> int:
         payload = {
             'coordinate_frame': 'MAVROS_LOCAL_ENU',
             'purpose': 'coarse_panel_approach',
+            'camera_capture': {
+                'method': 'high_speed_single_frame_burst_best_sharpness',
+                'frames_averaged': False,
+                'saved_image_rotation_deg': 180,
+                'requested_burst_count': args.camera_burst_count,
+                'burst_interval_ms': args.camera_burst_interval_ms,
+                'shutter_us': args.camera_shutter_us,
+            },
             'capture_lidar_m': distance_m,
             'capture_pose_enu_m': {
-                'east': float(pose.pose.position.x),
-                'north': float(pose.pose.position.y),
-                'up': float(pose.pose.position.z),
+                'east': capture_east_m,
+                'north': capture_north_m,
+                'up': capture_up_m,
+            },
+            'capture_motion': {
+                'xy_drift_m': capture_drift_m,
+                'lidar_change_m': capture_range_change_m,
             },
             'capture_attitude_deg': {
                 'roll': math.degrees(roll),
@@ -625,7 +853,12 @@ def main() -> int:
             height=args.height,
             camera_index=args.camera_index,
             output_path=verify_path,
+            shutter_us=args.camera_shutter_us,
+            burst_count=args.camera_burst_count,
+            burst_interval_ms=args.camera_burst_interval_ms,
         )
+        verify_frame = orient_da_daka_camera_frame(verify_frame)
+        cv2.imwrite(str(verify_path), verify_frame)
         verify_candidates = detect_panel_candidates(
             verify_frame,
             min_area_ratio=args.min_area_ratio,

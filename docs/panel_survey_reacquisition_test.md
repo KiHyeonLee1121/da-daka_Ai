@@ -74,6 +74,33 @@ team should subscribe to:
 `PoseStamped.position.{x,y,z}` is the approximate low-altitude target in MAVROS
 local ENU meters.
 
+## Optional operator-gated XY reposition node
+
+`survey_reposition` reuses the bounded Local ENU position-setpoint approach
+from the panel square-route mission, but is deliberately narrower:
+
+- only X and Y from `/survey/panel_target_local` are used;
+- current Local Z is latched when `/survey/reposition/start` is called;
+- the survey-capture yaw is commanded first, and XY translation begins only
+  after yaw remains within 5 degrees for 0.5 seconds;
+- it never arms, disarms, takes off, lands, or requests a PX4 mode;
+- after hold-setpoint prestream, the QGC operator must select OFFBOARD;
+- leaving OFFBOARD is treated as an external handover and setpoints stop;
+- a stale target, a target farther than 4 m, or another setpoint publisher
+  blocks start.
+
+The checked-in configuration remains disabled with
+`configuration_approved: false`. Enabling it is a per-test operator decision.
+While the node reports `TARGET_HOLD`, leave OFFBOARD before using the normal
+altitude controller for the low-altitude verification step.
+
+Launch it for an approved test without editing the checked-in YAML:
+
+```bash
+ros2 launch da_daka_control survey_reposition.launch.py \
+  configuration_approved:=true
+```
+
 ## Recommended test run
 
 First hover near a TF-Luna ground distance of 3 m with small roll/pitch. Then:
@@ -118,7 +145,58 @@ The actual test result should be judged primarily from
 panel/dirt detector to reacquire it? The built-in rectangle check is only a coarse
 automatic indicator.
 
+## Vibration-safe camera capture
+
+The default capture deliberately does not average or blend images. Camera Module
+3 has a rolling shutter, so propeller vibration can bend straight panel/grid lines
+even in one frame. The script therefore uses a 1/1000 second exposure, keeps the
+same full-field-of-view sensor mode with zero-shutter-lag capture, takes a short
+burst of individual frames, and saves only the frame with the highest central
+sharpness score. The same method is used for survey and low-altitude verification.
+
+The defaults can be tuned without changing code:
+
+```bash
+--camera-shutter-us 1000
+--camera-burst-count 5
+--camera-burst-interval-ms 120
+```
+
+A shorter shutter reduces blur but may require more sensor gain in darker light.
+Image selection reduces the chance of retaining a bad vibration phase; it does
+not replace propeller balancing or a mechanically sound camera mount.
+
+When ROS runs in a container and the camera is host-only, run
+`tools/camera_capture_proxy.py` on the host and bind-mount
+`tools/rpicam-still-proxy` into the container as `rpicam-still`.
+
+On the DA-DAKA Raspberry Pi this proxy is installed as a persistent user
+service. Its unit is kept in the repository and linked into systemd:
+
+```bash
+loginctl enable-linger kihyeon
+systemctl --user link \
+  ~/da-daka_Ai/tools/systemd/da-daka-camera-proxy.service
+systemctl --user enable --now da-daka-camera-proxy.service
+```
+
+`linger` starts the user service manager at boot even before a desktop login.
+The service restarts automatically after a camera-proxy failure. Check it with:
+
+```bash
+systemctl --user status da-daka-camera-proxy.service
+curl http://127.0.0.1:18765/health
+```
+
 ## Camera orientation calibration
+
+The installed DA-DAKA camera is rotated 180 degrees in the image plane. The
+survey tool always rotates newly captured survey and verification frames by 180
+degrees before saving, detection, and coordinate calculation. The normalized
+image therefore has image top as vehicle front and image right as vehicle right.
+`--camera-yaw-offset-deg` defaults to zero and is only for an additional residual
+mounting-angle correction; do not set it to 180 for this installed camera because
+that would apply the correction twice.
 
 Before trusting left/right/forward/back signs, place a recognizable object to the
 physical front/right of the vehicle while the propellers are removed and verify
