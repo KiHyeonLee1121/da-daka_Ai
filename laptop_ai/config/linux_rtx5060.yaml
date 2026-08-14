@@ -14,6 +14,23 @@ video:
   max_frame_age_s: 0.35
   capture_buffer_size: 1
 
+panel:
+  # Dirt inference is allowed only inside a confirmed panel ROI.
+  enabled: true
+  mode: "contour"
+  min_area_ratio: 0.15
+  min_aspect_ratio: 1.15
+  max_aspect_ratio: 4.5
+  min_rectangularity: 0.55
+  approx_epsilon_ratio: 0.03
+  canny_low: 50
+  canny_high: 150
+  padding_ratio: 0.02
+  manual_x: 0
+  manual_y: 0
+  manual_width: 640
+  manual_height: 480
+
 detector:
   backend: "onnx"
   # Supply the validated dirt model locally; model binaries are not committed.
