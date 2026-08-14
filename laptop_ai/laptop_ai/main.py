@@ -13,6 +13,8 @@ from laptop_ai.detector_base import BaseDetector
 from laptop_ai.health_monitor import HealthMonitor
 from laptop_ai.onnx_detector import OnnxDetector
 from laptop_ai.opencv_detector import OpenCvDetector
+from laptop_ai.panel_detector import PanelDetector
+from laptop_ai.perception_pipeline import PanelDirtPipeline
 from laptop_ai.performance import configure_opencv
 from laptop_ai.udp_result_sender import UdpResultSender
 from laptop_ai.video_receiver import VideoReceiver
@@ -23,7 +25,10 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Receive Pi video, run dirt inference, and send UDP JSON results"
+        description=(
+            "Receive Pi video, detect panel/dirt, and send target coordinates "
+            "as UDP JSON"
+        )
     )
     parser.add_argument("--config", required=True, help="Path to laptop_ai YAML config")
     return parser.parse_args()
@@ -40,7 +45,8 @@ def create_detector(config: AppConfig) -> BaseDetector:
 def run(config: AppConfig) -> int:
     configure_opencv(config.performance)
     receiver = VideoReceiver(config.video)
-    detector = create_detector(config)
+    dirt_detector = create_detector(config)
+    pipeline = PanelDirtPipeline(PanelDetector(config.panel), dirt_detector)
     sender = UdpResultSender(
         config.network.destination_host,
         config.network.destination_port,
@@ -53,9 +59,11 @@ def run(config: AppConfig) -> int:
     last_no_detection_send_s = -float("inf")
 
     logger.info(
-        "starting source=%r backend=%s detector=%s destination=%s:%d source_id=%s session=%s",
+        "starting source=%r backend=%s panel=%s detector=%s destination=%s:%d "
+        "source_id=%s session=%s",
         config.video.source,
         config.video.backend,
+        config.panel.mode,
         config.detector.backend,
         config.network.destination_host,
         config.network.destination_port,
@@ -84,7 +92,7 @@ def run(config: AppConfig) -> int:
             ):
                 continue
 
-            result = detector.detect(packet)
+            result = pipeline.detect(packet)
             result.validate(require_transport=False)
             health.metrics.processed_frames += 1
             health.metrics.last_inference_ms = result.inference_time_ms
@@ -108,11 +116,13 @@ def run(config: AppConfig) -> int:
                     if not result.dirt_found:
                         last_no_detection_send_s = now_s
                     logger.debug(
-                        "sent frame=%d sequence=%d dirt=%s confidence=%.3f bytes_session=%s",
+                        "sent frame=%d sequence=%d dirt=%s confidence=%.3f "
+                        "panel_roi=%s session=%s",
                         wire_result.frame_id,
                         wire_result.sequence,
                         wire_result.dirt_found,
                         wire_result.confidence,
+                        pipeline.last_panel_roi,
                         wire_result.session_id,
                     )
                 except (OSError, ValueError) as exc:
@@ -129,7 +139,7 @@ def run(config: AppConfig) -> int:
         logger.info("Ctrl+C received")
     finally:
         receiver.close()
-        detector.close()
+        pipeline.close()
         sender.close()
         debug_view.close()
         logger.info(
