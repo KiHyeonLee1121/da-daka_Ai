@@ -22,7 +22,7 @@ Raspberry Pi
   -> distance_controller (LiDAR Z correction)
   -> control_command_mixer (single MAVROS cmd_vel publisher)
   -> Pixhawk / PX4
-  -> combined target reached
+  -> combined visual + distance target reached
   -> cleaning_coordinator verifies actual vehicle stop
   -> spray_controller trigger
 ```
@@ -43,9 +43,9 @@ The mixer publishes `/cleaning/target_reached` only when all of these are true:
 - the dirt coordinate is currently aligned;
 - the LiDAR distance controller reports its stable target reached.
 
-Only `cleaning_mission.launch.py` remaps the Mission Manager's existing target
-subscription to this stricter combined target. The legacy distance-only launch is
-unchanged.
+`cleaning_mission.launch.py` remaps the Mission Manager's existing
+`/distance_control/target_reached` subscription to this stricter combined target.
+The legacy distance-only launch is unchanged.
 
 ## Spray gate
 
@@ -60,11 +60,12 @@ when:
 - MAVROS-reported vehicle speed is below the configured stop threshold for the
   configured hold duration.
 
-The repository still does not define the exact physical Pixhawk relay/servo/PWM
-mapping for the nozzle. `spray_controller` is therefore deliberately fail-closed
-and dry-run only. Replacing that endpoint with the bench-tested physical actuator
-adapter does not require changes to AI, visual servo, distance control, or mission
-logic.
+This completes the software path down to the spray service request. The repository
+still does **not** define the exact physical Pixhawk relay/servo/PWM mapping for the
+nozzle. `spray_controller` is deliberately fail-closed and dry-run only until that
+hardware mapping is known and bench-tested. Replacing the dry-run endpoint with a
+physical actuator adapter does not require changes to AI, visual servo, distance
+control, command mixing, or the spray gate.
 
 ## Running the ROS cleaning stack
 
@@ -85,5 +86,5 @@ the Pi receiver.
 2. Verify an AI heartbeat loss immediately drives mixer output to zero.
 3. Verify stale/invalid detection never makes `/cleaning/target_reached` true.
 4. Verify LiDAR target loss makes the combined target false.
-5. Verify the spray service is still dry-run until the physical output mapping is
-   explicitly implemented and tested.
+5. Verify the physical spray output remains disabled until its exact Pixhawk
+   mapping is implemented and tested.
