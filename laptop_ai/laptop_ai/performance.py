@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,13 @@ from laptop_ai.config import PerformanceConfig
 
 
 logger = logging.getLogger(__name__)
+
+
+def configure_cuda_environment(config: PerformanceConfig) -> None:
+    """Set process-level CUDA knobs before ONNX Runtime creates a CUDA context."""
+    if config.cuda_module_loading_lazy:
+        previous = os.environ.setdefault("CUDA_MODULE_LOADING", "LAZY")
+        logger.info("CUDA_MODULE_LOADING=%s", previous)
 
 
 def configure_opencv(config: PerformanceConfig) -> None:
@@ -36,9 +44,13 @@ def create_onnx_provider_options(
     cuda = {
         "device_id": device_id,
         "do_copy_in_default_stream": "1",
+        "arena_extend_strategy": config.onnx_cuda_arena_extend_strategy,
+        "cudnn_conv_algo_search": config.onnx_cuda_cudnn_conv_algo_search,
         "cudnn_conv_use_max_workspace": (
             "1" if config.onnx_cuda_conv_use_max_workspace else "0"
         ),
+        "enable_cuda_graph": "1" if config.onnx_cuda_enable_graph else "0",
+        "use_tf32": "1" if config.onnx_cuda_use_tf32 else "0",
         "prefer_nhwc": "1" if config.onnx_cuda_prefer_nhwc else "0",
     }
     tensorrt = {
