@@ -23,6 +23,24 @@ class VideoConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PanelConfig:
+    enabled: bool = True
+    mode: str = "contour"
+    min_area_ratio: float = 0.15
+    min_aspect_ratio: float = 1.15
+    max_aspect_ratio: float = 4.5
+    min_rectangularity: float = 0.55
+    approx_epsilon_ratio: float = 0.03
+    canny_low: int = 50
+    canny_high: int = 150
+    padding_ratio: float = 0.02
+    manual_x: int = 0
+    manual_y: int = 0
+    manual_width: int = 640
+    manual_height: int = 480
+
+
+@dataclass(frozen=True, slots=True)
 class DetectorConfig:
     backend: str = "opencv"
     confidence_threshold: float = 0.5
@@ -95,6 +113,7 @@ class PerformanceConfig:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     video: VideoConfig
+    panel: PanelConfig
     detector: DetectorConfig
     network: NetworkConfig
     debug: DebugConfig
@@ -118,6 +137,7 @@ def load_config(path: str | Path) -> AppConfig:
         raise ValueError("configuration root must be a YAML mapping")
 
     video_raw = _mapping(raw.get("video"), "video")
+    panel_raw = _mapping(raw.get("panel"), "panel")
     detector_raw = _mapping(raw.get("detector"), "detector")
     network_raw = _mapping(raw.get("network"), "network")
     debug_raw = _mapping(raw.get("debug"), "debug")
@@ -128,13 +148,15 @@ def load_config(path: str | Path) -> AppConfig:
         raise ValueError("network.destination_host is required")
 
     video = VideoConfig(**video_raw)
+    panel = PanelConfig(**panel_raw)
     detector = DetectorConfig(**detector_raw)
     network = NetworkConfig(**network_raw)
     debug = DebugConfig(**debug_raw)
     performance = PerformanceConfig(**performance_raw)
-    _validate(video, detector, network, debug, performance)
+    _validate(video, panel, detector, network, debug, performance)
     return AppConfig(
         video=video,
+        panel=panel,
         detector=detector,
         network=network,
         debug=debug,
@@ -144,6 +166,7 @@ def load_config(path: str | Path) -> AppConfig:
 
 def _validate(
     video: VideoConfig,
+    panel: PanelConfig,
     detector: DetectorConfig,
     network: NetworkConfig,
     debug: DebugConfig,
@@ -166,6 +189,26 @@ def _validate(
         raise ValueError("video dimensions and process_every_n_frames must be positive")
     if video.max_frame_age_s <= 0.0:
         raise ValueError("video.max_frame_age_s must be positive")
+
+    if panel.mode not in {"contour", "manual", "full_frame"}:
+        raise ValueError("panel.mode must be contour, manual, or full_frame")
+    if not 0.0 < panel.min_area_ratio <= 1.0:
+        raise ValueError("panel.min_area_ratio must be within (0, 1]")
+    if panel.min_aspect_ratio <= 0.0 or panel.max_aspect_ratio < panel.min_aspect_ratio:
+        raise ValueError("panel aspect ratio bounds are invalid")
+    if not 0.0 < panel.min_rectangularity <= 1.0:
+        raise ValueError("panel.min_rectangularity must be within (0, 1]")
+    if not 0.0 < panel.approx_epsilon_ratio < 0.25:
+        raise ValueError("panel.approx_epsilon_ratio must be within (0, 0.25)")
+    if not 0 <= panel.canny_low < panel.canny_high <= 255:
+        raise ValueError("panel Canny thresholds must satisfy 0 <= low < high <= 255")
+    if not 0.0 <= panel.padding_ratio < 0.5:
+        raise ValueError("panel.padding_ratio must be within [0, 0.5)")
+    if min(panel.manual_x, panel.manual_y) < 0:
+        raise ValueError("panel manual origin cannot be negative")
+    if min(panel.manual_width, panel.manual_height) < 1:
+        raise ValueError("panel manual dimensions must be positive")
+
     if detector.backend not in {"opencv", "onnx"}:
         raise ValueError("detector.backend must be 'opencv' or 'onnx'")
     provider = (
