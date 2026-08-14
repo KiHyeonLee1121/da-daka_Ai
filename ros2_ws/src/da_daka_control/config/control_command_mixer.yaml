@@ -1,0 +1,12 @@
+control_command_mixer:
+  ros__parameters:
+    distance_command_topic: /distance_control/cmd_vel_z
+    visual_command_topic: /visual_servo/cmd_vel_xy
+    visual_target_valid_topic: /visual_servo/target_valid
+    output_topic: /mavros/setpoint_velocity/cmd_vel
+    health_topic: /control_mixer/healthy
+    frame_id: map
+    publish_rate_hz: 20.0
+    distance_command_timeout_s: 0.3
+    visual_command_timeout_s: 0.3
+    require_visual_target: true
