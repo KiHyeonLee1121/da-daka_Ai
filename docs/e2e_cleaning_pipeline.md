@@ -22,9 +22,11 @@ Raspberry Pi
   -> distance_controller (LiDAR Z correction)
   -> control_command_mixer (single MAVROS cmd_vel publisher)
   -> Pixhawk / PX4
-  -> combined visual + distance target reached
+  -> /cleaning/target_reached (visual alignment + stable LiDAR distance)
   -> cleaning_coordinator verifies actual vehicle stop
   -> spray_controller trigger
+  -> /cleaning/complete only after spray service success
+  -> Mission Manager handover / landing sequence
 ```
 
 ## Why command mixing is separate
@@ -43,11 +45,10 @@ The mixer publishes `/cleaning/target_reached` only when all of these are true:
 - the dirt coordinate is currently aligned;
 - the LiDAR distance controller reports its stable target reached.
 
-`cleaning_mission.launch.py` remaps the Mission Manager's existing
-`/distance_control/target_reached` subscription to this stricter combined target.
-The legacy distance-only launch is unchanged.
+`/cleaning/target_reached` is deliberately a **pre-spray gate**, not mission
+success. It means the aircraft is geometrically ready for final stop verification.
 
-## Spray gate
+## Spray and mission-completion gate
 
 `cleaning_coordinator` does not command flight. It requests one spray pulse only
 when:
@@ -59,6 +60,13 @@ when:
 - `/cleaning/target_reached` is true;
 - MAVROS-reported vehicle speed is below the configured stop threshold for the
   configured hold duration.
+
+Only after `/spray/trigger` returns success does the coordinator publish
+`/cleaning/complete=true`. `cleaning_mission.launch.py` remaps the legacy Mission
+Manager's `/distance_control/target_reached` subscription to `/cleaning/complete`.
+Therefore the mission cannot advance to its final target-hold/handover sequence
+merely because the aircraft reached the correct position; the software spray step
+must also have succeeded. The legacy distance-only launch is unchanged.
 
 This completes the software path down to the spray service request. The repository
 still does **not** define the exact physical Pixhawk relay/servo/PWM mapping for the
@@ -86,5 +94,7 @@ the Pi receiver.
 2. Verify an AI heartbeat loss immediately drives mixer output to zero.
 3. Verify stale/invalid detection never makes `/cleaning/target_reached` true.
 4. Verify LiDAR target loss makes the combined target false.
-5. Verify the physical spray output remains disabled until its exact Pixhawk
+5. Verify `/cleaning/complete` remains false when the spray service is unavailable
+   or rejects the request.
+6. Verify the physical spray output remains disabled until its exact Pixhawk
    mapping is implemented and tested.
