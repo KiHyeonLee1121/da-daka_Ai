@@ -1,8 +1,8 @@
 # Branch consolidation record
 
-The autonomous mission is consolidated on `main` through
-`codex/autonomous-cleaning-mission`. Branches are removed only after the PR is
-merged and the resulting `main` revision is verified.
+The autonomous mission is consolidated on `main` through the integration and
+final-audit PRs. Branches are removed only after the resulting `main` revision
+is verified.
 
 | Source branch (audited tip) | Consolidated result |
 |---|---|
@@ -16,6 +16,7 @@ merged and the resulting `main` revision is verified.
 | `codex/pendulum-joint-optimization` (`0d03614`) | Observe-only joint optimizer, scene-change trigger, CUDA tools and camera diagnostics were retained. Single-target/QGC-assisted flight logic was replaced by the Pi-owned multi-panel FSM. |
 | `audit/full-software-check-20260814` (`777b5dd`) | Replaced by `.github/workflows/full-software-audit.yml`, now running on PRs and `main`, with CPU tests plus a ROS 2 Jazzy build/test job. |
 | `codex/dashboard-ai-tools` (`20c0905`) | The real mobile-camera diagnostic relay was moved to `tools/`. Mock telemetry and mock flight/spray commands were not connected to the aircraft because they would create a second, untrusted control path. Operational state is published through ROS topics. |
+| `codex/auto-panel-survey-mission` (`5636e5b`) | Its calibrated footprint/mount offsets and 7-degree survey-tilt gate were retained and extended to full quaternion projection. Its single still-image, single-panel, Pi/OpenCV/blue-color fallback path was replaced by the continuous laptop multi-panel stream, repeated metric observations and dynamic route. Direct camera capture remains a field diagnostic so it cannot become a second camera owner during flight. |
 
 ## Final control ownership
 

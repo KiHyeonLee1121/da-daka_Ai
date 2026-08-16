@@ -9,6 +9,7 @@ from da_daka_control.panel_mapping import (
     PanelMapBuilder,
     PanelObservation,
     project_panel_observation_attitude,
+    quaternion_tilt_rad,
 )
 from da_daka_interfaces.msg import (
     PanelMap,
@@ -127,6 +128,7 @@ class PanelSurveyNode(Node):
         self.declare_parameter('merge_radius_m', 0.45)
         self.declare_parameter('minimum_observations', 3)
         self.declare_parameter('minimum_panel_confidence', 0.55)
+        self.declare_parameter('maximum_survey_tilt_deg', 7.0)
         self.declare_parameter('input_timeout_s', 0.5)
         self.declare_parameter('publish_rate_hz', 5.0)
 
@@ -175,10 +177,15 @@ class PanelSurveyNode(Node):
         self._minimum_panel_confidence = float(
             value('minimum_panel_confidence')
         )
+        self._maximum_survey_tilt_rad = math.radians(
+            float(value('maximum_survey_tilt_deg'))
+        )
         self._input_timeout_s = float(value('input_timeout_s'))
         self._publish_rate_hz = float(value('publish_rate_hz'))
         if not 0.0 <= self._minimum_panel_confidence <= 1.0:
             raise ValueError('minimum_panel_confidence must be within [0, 1]')
+        if not 0.0 < self._maximum_survey_tilt_rad <= math.pi / 2.0:
+            raise ValueError('maximum_survey_tilt_deg must be within (0, 90]')
         if min(self._input_timeout_s, self._publish_rate_hz) <= 0.0:
             raise ValueError('survey timeouts/rates must be positive')
 
@@ -225,6 +232,15 @@ class PanelSurveyNode(Node):
         self._last_result_key = result_key
         pose = self._pose.pose
         try:
+            orientation = (
+                float(pose.orientation.x),
+                float(pose.orientation.y),
+                float(pose.orientation.z),
+                float(pose.orientation.w),
+            )
+            if quaternion_tilt_rad(orientation) > self._maximum_survey_tilt_rad:
+                self._publish_state('TILT_REJECTED')
+                return
             for detected in message.panels:
                 confidence = float(detected.confidence)
                 if confidence < self._minimum_panel_confidence:
@@ -241,12 +257,7 @@ class PanelSurveyNode(Node):
                     vehicle_east_m=float(pose.position.x),
                     vehicle_north_m=float(pose.position.y),
                     vehicle_up_m=float(pose.position.z),
-                    vehicle_quaternion_xyzw=(
-                        float(pose.orientation.x),
-                        float(pose.orientation.y),
-                        float(pose.orientation.z),
-                        float(pose.orientation.w),
-                    ),
+                    vehicle_quaternion_xyzw=orientation,
                     measured_center_distance_m=self._distance_m,
                     camera_mount_rpy_rad=self._camera_mount_rpy_rad,
                     camera_offset_body_m=self._camera_offset_body_m,
