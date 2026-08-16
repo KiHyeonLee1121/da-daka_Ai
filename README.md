@@ -1,636 +1,454 @@
-# DAKA RPi MVP
+# DA-DAKA 무작위 패널 자율 청소 드론
 
-아크릴판을 태양광 패널처럼 꾸며 놓고, 드론이 카메라로 이물질을 찾은 뒤 가까운 거리에서 선택적으로 분사하는 흐름을 테스트하기 위한 Raspberry Pi 5용 MVP.
+[![Full software audit](https://github.com/KiHyeonLee1121/da-daka_Ai/actions/workflows/full-software-audit.yml/badge.svg)](https://github.com/KiHyeonLee1121/da-daka_Ai/actions/workflows/full-software-audit.yml)
 
-처음부터 실제 태양광 패널 현장에 바로 투입하는 프로그램은 아님. 현재 목표는 훨씬 현실적인 쪽. 낮은 고도에서 아크릴 모사 패널을 촬영하고, 화면 안의 이물질 위치를 찾고, LiDAR 거리 조건이 맞을 때만 분사 명령을 내리는 기본 임무 흐름을 먼저 검증.
+Raspberry Pi 5가 QGroundControl(QGC)을 거치지 않고 PX4의 ARM, OFFBOARD 이동,
+분사 순서, 원점 복귀와 착륙을 소유하고, NVIDIA GPU 노트북은 영상 추론만
+담당하는 ROS 2 Jazzy 프로젝트다.
 
-## 현재 시스템 구조
+## 현재 상태
 
-현재 시스템은 **Raspberry Pi 5 호스트에서 Docker 컨테이너 방식으로 운영**한다.
-ROS 2 Jazzy와 관련 제어 노드는 Ubuntu 24.04 arm64 Docker 컨테이너에서
-실행한다.
+- 최종 시나리오의 소프트웨어 단계는 `main`의
+  `autonomous_cleaning.launch.py`와 최상위 미션 FSM에 통합되어 있다.
+- 임의 배치된 패널의 미터 좌표 추정, 이동 순서 계산, 프레임 진입 감속,
+  거리·헤딩·노즐 위치 보정, 오염 판정, 분사 후 재검증, 재분사, 원점 복귀와
+  착륙 경로가 구현되어 있다.
+- Pi가 비행 제어권을 소유하며 노트북은 MAVROS setpoint, ARM, 비행 모드를
+  제어할 수 없다.
+- 소프트웨어 CI 통과는 실기체 비행 검증 완료를 뜻하지 않는다. 학습 모델,
+  실측 보정값, GPIO 회로, 실제 장치 경로, 네트워크/GPU 환경과 단계별 현장
+  시험은 별도로 완료해야 한다.
+- `configuration_approved`, `calibration_approved`, 실제 분사 출력의 기본값은
+  모두 닫혀 있다. 필요한 확인을 끝내기 전에는 미션 시작 또는 실제 분사가
+  거부된다.
 
-실기체 제어 구조는 제어팀 PC에서 OFFBOARD 명령을 생성하는 방식에서,
-Raspberry Pi 5가 기체 탑재 제어 컴퓨터 역할을 하는 방식으로 개편 중이다.
-
-```text
-제어팀 PC QGroundControl
-  └─ 상태 감시, 모드 확인, Hold/Land 비상 개입
-                 ↕ Wi-Fi UDP MAVLink
-Raspberry Pi 5 (Docker 호스트)
-  └─ Ubuntu 24.04 arm64 Docker 컨테이너
-      ├─ mavlink-router
-      ├─ ROS 2 Jazzy / MAVROS
-      ├─ TF-Luna 거리 입력, 필터, 1 m 거리제어
-      ├─ 거리 또는 패널 Mission Manager (동시 실행 금지)
-      ├─ 카메라 및 오염 검출
-      └─ 분사제어
-                 ↕ Serial MAVLink
-Pixhawk 4 / PX4
-  └─ 자세 안정화와 저수준 비행제어
-```
-
-비행 순서와 PX4 모드 전환 권한은 비행별 ROS 2 Mission Manager 하나로
-제한한다. 거리 Mission Manager와 Panel Mission은 동시에 실행하지 않는다.
-거리 오차에 따른 속도 setpoint는 활성화된
-`distance_controller`만 발행한다. 기존 `main.py`의 `MavlinkBridge`와
-ROS 2 거리제어를 동시에 live 모드로 실행하면 안 된다. 최종 launch에서는
-노트북 AI가 검출 결과만 제공하고, Pi의 분사 노드는 서비스 요청만 처리하며,
-`autonomous_cleaning_mission` 하나가 MAVROS setpoint를 소유한다.
-
-현재 ROS 2 거리제어 패키지는 `ros2_ws/src/da_daka_control`에 있다.
-상세한 통합 상태, 인터페이스와 남은 작업은
-[`docs/system_architecture.md`](docs/system_architecture.md)를 참고한다.
-
-## 2026-08-16 무작위 패널 통합 자율 청소 미션
-
-고정 사각형 경로와 Pi 내부 임시 AI 대신, 3 m 측량 영상에서 복수 패널의
-Local ENU 좌표를 만들고 배치에 따라 방문 순서를 계산하는 통합 미션을
-추가했다. Pi5가 ARM/OFFBOARD/이동/분사/복귀 순서를 소유하고, 노트북은
-NVIDIA CUDA 추론 결과만 돌려준다.
-
-통합 launch, 정확한 상태 순서, Pi↔노트북 UDP 인터페이스, 실기체에서 반드시
-측정해야 할 값은
-[`docs/autonomous_cleaning_architecture.md`](docs/autonomous_cleaning_architecture.md)에
-정리되어 있다.
-
-각 원격 브랜치에서 흡수·대체한 기능과 고정 격자·mock 명령처럼 최종 제어
-구조에서 제외한 이유는
-[`docs/branch_consolidation.md`](docs/branch_consolidation.md)에 기록했다.
-
-## 2026-08-05 Local Z 이륙 및 거리제어 시험 구조
-
-GPS 원시 MSL 고도 변동이 자동이륙 목표에 들어가지 않도록 기존 AMSL 기반
-이륙 호출을 제거했다. 거리제어 시험은 Arm 시점의 PX4 Local Z를 출발
-기준으로 저장하고, 그 기준에서 `+1.1 m`까지 상승한다. 하향 LiDAR는 이륙
-목표 계산에 사용하지 않고, Local Z 이륙이 끝난 뒤 1 m 거리제어에만 쓴다.
-
-역할은 다음처럼 분리한다.
-
-- `distance_controller`: MAVROS 수직속도 setpoint의 단일 발행자. Local Z
-  이륙 모드와 LiDAR 거리제어 모드를 제공하며 두 모드는 상호배제한다.
-- `mission_manager`: 거리제어 시험 전용 상태머신. 시험을 실행할 때만 Arm,
-  모드 전환, 제어 ON/OFF, Loiter와 Land 순서를 관리한다.
-- 다른 미션: `/local_takeoff/enable`과 `/distance_control/enable` 서비스를
-  필요한 구간에서 호출해 같은 제어 기능을 재사용할 수 있다.
-- PX4: ROS가 전달한 수직속도 목표 아래에서 기존 속도·자세·rate PID와
-  모터 출력을 계속 담당한다. 이번 변경은 PX4 PID 파라미터를 수정하지 않는다.
-- `altitude_guard`: 정상 미션과 독립적으로 출발 Local Z 대비 5 m 상승 또는
-  Local Z telemetry 손실을 감시하고 `AUTO.LAND`를 요청한다.
-
-거리제어 시험의 현재 순서는 다음과 같다.
+## 최종 임무
 
 ```text
-PRECHECK -> ARM
--> Local Z controller ON / zero setpoint prestream
--> OFFBOARD -> launch Local Z +1.1 m stable hold
--> AUTO.LOITER confirmed
--> Local Z OFF -> LiDAR distance control ON / setpoint prestream
--> OFFBOARD -> 1.0 m distance hold
--> AUTO.LOITER -> LiDAR OFF -> AUTO.LAND -> Disarm
+PRECHECK -> ARMING -> TAKEOFF(3 m)
+-> SURVEY -> PLAN_ROUTE -> DESCEND(분사 거리)
+-> TRANSIT -> SLOW_APPROACH -> REACQUIRE -> ASSESS
+   ├─ clean -> 다음 패널
+   └─ dirty -> PRECISION_ALIGN -> SPRAY -> VERIFY
+                 ├─ dirty -> PRECISION_ALIGN 후 재분사
+                 └─ clean -> 다음 패널
+-> RETURN_HOME -> AUTO.LAND -> COMPLETE
 ```
 
-Local Z와 LiDAR 제어를 OFFBOARD 안에서 바로 교체하지 않는다. 두 서비스
-호출 사이 setpoint 공백으로 PX4 OFFBOARD가 해제되는 상황을 피하기 위해
-`AUTO.LOITER` 확인 후 교체하고, 새 setpoint를 프리스트림한 뒤 OFFBOARD에
-재진입한다. 실제 비행 전에 반드시 프로펠러 제거 벤치 시험과 QGC 모드 확인을
-먼저 수행해야 한다.
+1. 이륙 기준점과 yaw를 저장하고 LiDAR 기준 3 m까지 이륙한다.
+2. 전체 촬영 중 검출한 패널을 카메라 실측값, LiDAR 거리, MAVROS 자세로 지면
+   좌표에 투영하고 여러 프레임 관측을 하나의 패널 지도로 합친다.
+3. 무작위 배치 지도를 기준으로 nearest-neighbour와 2-opt로 이동 순서를
+   계산한다.
+4. 분사 거리로 하강하고 첫 패널의 근사 좌표로 이동한다. 목표 패널이 프레임에
+   들어오면 즉시 접근 속도를 제한한다.
+5. 목표 패널을 다시 확인하고 깨끗하면 건너뛴다. 오염됐다면 LiDAR 거리,
+   이륙 yaw, 영상 중심과 카메라-노즐 오프셋을 함께 사용해 분사점을 맞춘다.
+6. 분사 후 새 추론 결과로 오염을 재검증한다. 오염이 남으면 설정된 최대 횟수
+   안에서 재정렬과 분사를 반복한다.
+7. 모든 패널 처리가 끝나면 저장한 이륙 ENU 좌표로 복귀하고 `AUTO.LAND`로
+   착륙한다.
 
-현재 Raspberry Pi 실기체 설정은 PWR2/PX4 Battery 2를 사용하며 두 Mission
-Manager 모두 MAVROS `BatteryState.location=id1`만 안전검사에 사용한다.
-거리 미션의 Battery/PX4 status timeout은 3초, 시작 최소 배터리는 10%다.
-현장 승인값 `ignored_unhealthy_sensor_mask=0x14000`은 해당 비트만 예외로
-처리하며 PX4 Low-battery failsafe와 다른 health bit는 계속 차단한다.
+QGC는 이 순서의 명령자가 아니다. 다만 상태 감시와 사람이 개입하는 비상
+Hold/Land 수단으로 연결할 수 있다. 외부 조작으로 OFFBOARD가 해제되면 미션은
+제어권을 자동으로 다시 빼앗지 않고 실패 처리한 뒤 외부에서 선택된 모드를
+존중한다.
 
-세부 파라미터, ROS 인터페이스와 실행 절차는
-[`ros2_ws/src/da_daka_control/README.md`](ros2_ws/src/da_daka_control/README.md)에
-정리되어 있다.
+## 시스템 구조와 제어권
 
-## 독립 패널 이동 시험 미션
-
-거리제어 시험과 별도로 시작부터 착륙까지 수행하는 `panel_mission` 노드를
-추가했다. 출발 Local XYZ를 기준으로 Local Z 이륙한 뒤, 승인된 상대 ENU
-좌표를 순회하고 마지막 패널 정지 후 `AUTO.LOITER`, `AUTO.LAND`, Disarm
-확인 순서로 종료한다.
-
-- 시작·중단 서비스: `/panel_mission/start`, `/panel_mission/abort`
-- 상태·결과 토픽: `/panel_mission/state`, `/panel_mission/result`
-- 현재 검증 경로: 출발 heading `204.22°` 기준 3 m 폐곡선 정사각형
-  `(-1.231,-2.735) → (1.504,-3.966) → (2.735,-1.231) → (0,0)`
-- 수평 position setpoint 진행속도: 최대 `0.30 m/s`
-- 좌표 승인 기본값: `configuration_approved=false`
-- Battery 2 선택: `battery_id=1`, 시작 최소 배터리 30%
-- Local pose/velocity timeout: 0.5초, Battery/PX4 status timeout: 3초
-- 현재 현장 승인 health 예외: `0x14000`만 허용, 다른 bit는 계속 차단
-- 거리제어와 패널 이동 setpoint 소유권 충돌 시 시작 거부 또는 중단
-- QGC/PX4의 LOITER·LAND·OFFBOARD 이탈을 우선하고 자동 재진입하지 않음
-- 기존 `altitude_guard`를 재사용하며 패널 시험 launch의 상승 한도는 `2.5 m`
-
-위 좌표는 당시 기체 heading을 ENU로 변환한 현장값이다. 새 위치·새 heading에서
-그대로 재사용하지 않고 실제 방향·시험구역을 다시 확인한다. 모든 GO 조건과
-승인 health mask를 확인하기 전에는 `configuration_approved`를 `true`로
-바꾸지 않는다. 패널 시험 launch는 자동으로 비행하지 않으며 명시적인 start
-서비스가 필요하다.
-
-## 2026-07-24 Raspberry Pi 제어구조 개편 작업
-
-제어 코드를 노트북 VM에서 실행하던 구조를 정리해, 최종적으로 Raspberry
-Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
-`ros2_ws/src/da_daka_control` 패키지를 추가했다. 제어팀 PC의 QGroundControl은
-상태 감시와 Hold/Land 비상 개입에 사용한다.
-
-이번에 추가·정리한 내용:
-
-- 거리 입력을 처리하는 `distance_filter`
-- 목표거리 1.0 m를 유지하는 `distance_controller`
-- SITL 시험용 `virtual_distance_sensor`
-- Arm, 1.1 m 이륙, hover 확인, 거리제어, Loiter 인계, Land, Disarm을
-  순서대로 관리하는 Enum 기반 `mission_manager`
-- `/mission/start`, `/mission/abort` 서비스와 `/mission/state`,
-  `/mission/result` 상태 토픽
-- 거리센서 timeout 0.3초, 전체 거리제어 timeout 20초, 상태별 timeout과
-  최대 3회 재시도
-- 목표거리 오차 ±0.08 m를 5초 유지했을 때 도달 성공 판정
-- OFFBOARD 전 setpoint 2초 prestream과 서비스 응답 이후 실제 상태 확인
-- QGC/PX4가 OFFBOARD를 해제하거나 Land로 전환하면 자동 재진입하지
-  않고 운전자 개입을 우선하는 override latch
-- 자동 CSV 미션 로그와 운전자 개입 모드 기록
-- Raspberry Pi용 `mavlink-router.conf.example`, launch 파일, YAML 설정,
-  단위 테스트 및 실행 문서
-
-검증 결과:
-
-- 기존 Python MVP 테스트: 18 passed, 2 skipped
-- ROS 2 `da_daka_control` 테스트: 22 passed, 1 skipped
-- ROS 2 Jazzy `colcon build`, package 설치 및 launch 인자 확인 완료
-
-아직 남은 실기체 통합:
-
-- TF-Luna 드라이버의 실제 표면별 신호 세기와 거리 안정성 검증
-- Raspberry Pi–Pixhawk Serial MAVLink 장치명과 baud rate 확정
-- MAVROS, mavlink-router, QGC UDP endpoint 실기체 검증
-- AI 오염 검출 결과를 이동 명령으로 바꾸는 ROS 인터페이스
-- 분사제어 서비스와 전체 청소 미션 연결
-- 프로펠러를 제거한 bench test 후 제한된 공간에서 단계별 비행시험
-
-## 기존 Python MVP와 ROS 2 제어 패키지
-
-프로젝트에는 기존 Raspberry Pi 단일 Python MVP와 ROS 2 거리제어 패키지가
-함께 있다.
-
-- 하단 카메라 또는 영상 파일 입력
-- 아크릴 모사 패널 영역 처리
-- OpenCV 기반 이물질 검출
-- 이물질 중심점 계산
-- 화면 중심 기준 정렬 오차 계산
-- Mock 또는 Serial LiDAR 거리 입력
-- 화면 중심으로 타깃을 맞추는 visual servoing 명령 생성
-- Mission FSM 기반 임무 흐름 제어
-- Pixhawk/MAVLink dry-run 브리지
-- Mock 분사 컨트롤러
-- CSV, JSONL 로그 저장
-- 디버그 화면 및 선택적 디버그 영상 저장
-- ROS 2 거리 필터와 수직 거리 PID 제어
-- MAVROS 기반 자동 Arm, 이륙, OFFBOARD, Loiter, Land Mission Manager
-- QGC/PX4 외부 모드 개입 우선 처리(RC 입력은 운용 구조에서 제외)
-- 거리제어 미션 CSV 로그
-
-이 목록은 `main.py` 기반 과거 bench MVP의 기능이다. 최종 비행 launch는 이
-검출기와 이동·분사 출력을 사용하지 않는다. 최종 오염 추론은 노트북의
-CUDA ONNX worker가 담당하며, 사용할 수 없는 Hailo backend를 선택하면 다른
-모델로 조용히 대체하지 않고 시작 단계에서 fail-closed 된다.
-
-## 테스트 대상
-
-실제 태양광 패널이 아니라, 태양광 패널처럼 보이도록 만든 아크릴판을 대상으로 함.
-
-아크릴판은 실제 패널보다 반사와 글레어가 강할 수 있고, 조명 위치에 따라 흰색 하이라이트가 이물질처럼 보일 수 있음. 그래서 OpenCV 검출기에는 밝고 채도가 낮은 반사 영역을 걸러내는 옵션을 추가.
-
-실제 시험에서는 다음 조건을 먼저 확인하는 것이 중요.
-
-- 아크릴판 표면 반사
-- 카메라 각도
-- 조명 위치
-- 이물질 색상과 크기
-- LiDAR가 아크릴판 표면에서 안정적으로 거리를 읽는지
-- 호스와 분사 반동이 기체 자세에 주는 영향
-
-## 하드웨어 구성
-
-하드웨어는 아래 구성을 기준으로 함. 새 센서나 보드를 추가하는 것을 전제로 하지 않음.
-
-- 드론 기체
-- Pixhawk 기반 비행제어기
-- Raspberry Pi 5
-- Raspberry Pi 5 AI HAT+ 13 TOPS
-- 드론 하단 카메라
-- 드론 하단에 장착한 TF-Luna 싱글 포인트 LiDAR
-- 지상 펌프
-- 호스 라인
-- 노즐
-- 솔레노이드 밸브 또는 분사 트리거
-- 기존 배터리 및 전원 구성
-
-## Raspberry Pi와 Pixhawk의 역할
-
-Raspberry Pi는 상위 판단과 ROS 2 제어 컴퓨터 역할을 담당.
-
-- 카메라 프레임 처리
-- 이물질 검출
-- 이물질 중심점 계산
-- 화면 중심과의 오차 계산
-- TF-Luna 거리 수신과 필터링
-- 임무 상태 판단과 거리제어
-- MAVROS를 통해 Pixhawk에 상위 setpoint와 모드 요청 전달
-- 분사 조건 확인
-
-Pixhawk는 비행 안정화를 담당.
-
-- 자세 안정화
-- 저수준 비행 제어
-- 위치/속도 setpoint 처리
-- 실제 기체 안정성 유지
-
-Raspberry Pi가 모터를 직접 제어하지 않음. 이 구조를 지키는 이유는 안전 때문.
-
-## 왜 3D 좌표 계산을 먼저 하지 않았나
-
-이 프로젝트의 첫 목표는 정확한 3D 좌표 복원이 아니라, 실제로 돌아가는 임무 흐름을 만드는 것.
-
-기존 Python MVP가 검증하는 개념 흐름은 다음과 같음.
-
-1. 이미지에서 이물질 중심점 `(cx, cy)`를 찾는다.
-2. 화면 중심과 얼마나 떨어져 있는지 계산한다.
-3. 이물질이 화면 중앙에 오도록 이동 오차를 계산한다.
-4. ROS 2 비행 제어가 LiDAR 거리값을 목표 범위로 맞추고 정지한다.
-5. 일정 시간 안정적으로 유지되면 짧게 분사한다.
-6. 다시 촬영해서 이물질이 줄었는지 확인한다.
-
-기존 `visual_servo`와 `MavlinkBridge`는 위 흐름을 검증하기 위한 MVP다.
-최종 live 운용에서는 AI가 검출 결과와 정렬 오차를 ROS 토픽으로 제공하고,
-ROS Mission Manager만 비행 순서와 PX4 모드 전환을 관리해야 한다. 두
-프로그램이 동시에 Pixhawk에 live 명령을 보내면 안 된다.
-
-이 방식은 카메라 캘리브레이션, 패널 좌표계, 드론 좌표계 변환이 완성되기
-전에도 테스트할 수 있음. 특히 현재처럼 낮은 고도에서 아크릴판을 대상으로
-실험하는 단계에서는 이 접근이 더 단순하고 검증하기 쉬움.
-
-## 낮은 고도 테스트 기준
-
-거리와 고도 기준은 코드 세대별로 구분해야 한다.
-
-- 기존 Python MVP: 예상 비행 높이 `1.5 m ~ 2.0 m`, LiDAR 목표거리
-  `1.6 m ±0.25 m`, visual servo 속도 상한 `0.12 m/s`
-- ROS 2 거리제어 시험: PX4 local position 기준 상대 이륙고도 `1.1 m`,
-  하향 TF-Luna가 읽는 표면까지의 목표거리 `1.0 m`
-- ROS 2 도달 판정: 거리 오차 `±0.08 m`를 5초 유지
-- ROS 2 거리제어 최대 수직속도: `0.25 m/s`
-
-`1.1 m`는 PX4 기준 상대 고도이고 `1.0 m`는 LiDAR가 측정한 표면까지의
-거리이므로 같은 값이 아니다. 기존 `1.6 m` 설정을 ROS 2 실기체 시험에
-그대로 사용하면 안 된다.
-
-## 프로젝트 구조
-
-```text
-daka_rpi/
-  README.md
-  requirements.txt
-  main.py
-  docs/
-    system_architecture.md
-  config/
-    params.yaml
-  vision/
-    camera.py
-    panel_detector.py
-    dirt_detector_base.py
-    opencv_dirt_detector.py
-    hailo_dirt_detector.py
-    target_estimator.py
-  sensors/
-    lidar_reader.py
-  control/
-    mission_fsm.py
-    visual_servo.py
-    mavlink_bridge.py
-  actuator/
-    spray_command.py
-  utils/
-    config_loader.py
-    logger.py
-    drawing.py
-    time_utils.py
-  tests/
-    test_dirt_detector_acrylic.py
-    test_dirt_detector_synthetic.py
-    test_lidar_reader.py
-    test_mission_fsm.py
-    test_visual_servo.py
-  logs/
-  data/sample/
-  ros2_ws/
-    src/
-      da_daka_control/
-        config/
-        da_daka_control/
-        launch/
-        resource/
-        test/
+```mermaid
+flowchart TB
+    Camera["Pi 카메라"] --> Stream["UDP 영상 5600"]
+    Stream --> Laptop["NVIDIA 노트북 추론"]
+    Laptop -->|"추론 결과 UDP 5005"| Receiver["Pi perception receiver"]
+    Sensors["TF-Luna + MAVROS telemetry"] --> Mission["Pi 최상위 미션 FSM"]
+    Receiver --> Mission
+    Mission -->|"position/velocity setpoint"| MAVROS
+    MAVROS --> PX4
+    Mission --> Spray["GPIO 분사 제어"]
+    Mission -->|"모드/패널 UDP 5006"| Laptop
 ```
 
-`build/`, `install/`, `log/`, Python 가상환경과 비행 로그는 Git에 포함하지
-않는다.
+| 주체 | 소유하는 기능 | 소유하지 않는 기능 |
+|---|---|---|
+| Raspberry Pi 5 | 카메라 송신, LiDAR, 패널 지도/경로, 미션 FSM, MAVROS setpoint, ARM/OFFBOARD, 분사, 복귀/착륙 | CUDA 추론 |
+| NVIDIA 노트북 | 패널 검출, ONNX 오염 segmentation, 결과/heartbeat 송신 | 비행 명령, GPIO, 미션 순서 |
+| PX4/Pixhawk | 자세 안정화, 모터 출력, 비행 모드와 failsafe 실행 | 패널 인식과 청소 순서 판단 |
+| QGC/조종자 | 선택적 감시, 비상 Hold/Land 또는 수동 개입 | 정상 자율 임무의 지속적인 명령 |
 
-## ROS 2 거리제어 패키지
+여러 ROS 노드는 하나의 launch로 실행되지만 MAVROS position/velocity setpoint는
+최상위 `autonomous_cleaning_mission`만 발행한다. 거리 제어와 visual servo는
+내부 명령 토픽만 사용한다. 중복 setpoint publisher나 과거 미션이 활성화되어
+있으면 PRECHECK가 실패한다.
 
-운영 환경은 Raspberry Pi 5의 Debian 13 arm64 호스트와 Ubuntu 24.04 arm64
-Docker 컨테이너에서 실행하는 ROS 2 Jazzy이다.
+## 주요 구성
+
+| 경로 | 역할 |
+|---|---|
+| `ros2_ws/src/da_daka_control` | Pi의 센서, 측량, 경로, 정렬, 분사와 최종 미션 노드 |
+| `ros2_ws/src/da_daka_interfaces` | ROS 2 사용자 정의 메시지 |
+| `laptop_ai` | CUDA 전용 ONNX 추론 worker와 성능 측정 도구 |
+| `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
+| `docs/field_diagnostics.md` | 좌표 투영과 카메라 진단 절차 |
+| `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
+| `docs/pi_safe_main_sync_prompt.md` | Pi 로컬 작업 보존형 `main` 동기화 프롬프트 |
+| `tools` | 비행 명령을 내리지 않는 카메라/투영 진단 도구 |
+
+루트의 `main.py`와 `control/`, `vision/` 등은 과거 bench/호환 시험용 코드다.
+실제 비행 경로가 아니며 live backend는 fail-closed 상태다. 최종 ROS 미션과
+동시에 실행하면 안 된다. 과거 `panel_mission`과 `panel_distance_mission`도
+회귀시험 대상으로만 유지하며 실제 임무는 `autonomous_cleaning.launch.py`만
+사용한다.
+
+## Raspberry Pi에 최신 main을 안전하게 반영하기
+
+Pi 저장소에 커밋하지 않은 파일이나 별도 변경이 있으면 그 폴더에서 바로
+`git pull`, `git reset --hard`, `git clean`을 실행하지 않는다. 먼저 저장소
+전체와 `.git`, 추적·비추적 파일을 복사하고, 로컬 보존 브랜치를 만든 뒤,
+`origin/main`에서 시작한 별도 worktree에 Pi 변경을 파일별로 선별 적용한다.
+
+Pi에서 작업하는 Codex에 아래 문서의 코드 블록 전체를 그대로 전달한다.
+
+> **[Raspberry Pi 안전 동기화용 Codex 프롬프트](docs/pi_safe_main_sync_prompt.md)**
+
+이 프롬프트는 다음을 강제한다.
+
+- 저장공간과 저장소 확인 후 전체 폴더 백업
+- Pi 로컬 변경의 목록화와 로컬 백업 커밋
+- 최신 `origin/main` 기반 별도 worktree 구성
+- 생성물은 제외하고 장치 설정과 사용자 변경만 선별 재적용
+- 충돌별 의도 비교, ROS/Python 빌드·테스트, 정적 장치 확인
+- 기존 폴더를 유지한 전환과 원상복구 보고
+
+최신 main을 받은 뒤에도 Pi 실측 설정은 별도 로컬 배포 설정이나 명확히 식별된
+커밋으로 관리한다. 토큰, 비밀번호, 개인키는 저장소에 커밋하지 않는다.
+
+## 준비 환경
+
+### Raspberry Pi 5
+
+- Ubuntu 24.04와 ROS 2 Jazzy
+- PX4와 연결된 MAVROS 2
+- 필요할 경우 Pixhawk serial을 분기하는 `mavlink-router`
+- `rpicam-vid`를 사용할 수 있는 카메라 환경
+- TF-Luna serial 접근 권한
+- 실제 분사 시 libgpiod와 GPIO 접근 권한
+- 노트북과 통신할 전용 현장 네트워크
+
+최종 launch는 MAVROS나 `mavlink-router` 자체를 시작하지 않는다. 먼저 현장
+장치 경로로 이 둘을 구성하고 MAVROS 연결, local pose, velocity, battery,
+system status, ARM과 mode service가 정상인지 확인해야 한다. Pixhawk serial은
+한 프로세스만 열어야 한다. QGC와 MAVROS가 함께 필요하면
+`ros2_ws/src/da_daka_control/config/mavlink-router.conf.example`을 복사해 실제
+장치/baud/IP로 작성하고, router만 serial을 열며 MAVROS는 로컬 UDP endpoint를
+사용하게 한다.
 
 ```bash
-cd ros2_ws
 source /opt/ros/jazzy/setup.bash
+cd ros2_ws
 rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install --packages-select da_daka_control
+colcon build --symlink-install
 source install/setup.bash
-colcon test --packages-select da_daka_control
+colcon test
 colcon test-result --verbose
 ```
 
-실행 전 MAVROS, 실제 TF-Luna `/distance/raw`, Pixhawk 연결을 각각 확인한다.
-다음 launch는 TF-Luna 드라이버와 MAVROS를 자동으로 시작하지 않는다.
+### NVIDIA 노트북
+
+- NVIDIA GPU와 해당 GPU/OS에 맞는 드라이버
+- 설치할 `onnxruntime-gpu`와 호환되는 CUDA 환경
+- Python 3.10 이상
+- FFmpeg/PyAV가 Pi의 H.264 MPEG-TS UDP 영상을 decode할 수 있는 환경
 
 ```bash
-ros2 launch da_daka_control distance_mission.launch.py
-```
-
-`/mission/start`는 자동 Arm과 이륙을 시작하므로 프로펠러 제거 점검과
-GO/NO-GO 확인 전에는 호출하지 않는다.
-
-```bash
-ros2 service call /mission/start std_srvs/srv/Trigger "{}"
-ros2 service call /mission/abort std_srvs/srv/Trigger "{}"
-```
-
-현재 검증된 설정은 Home 기준 이륙고도 `1.1 m`, 하향 센서 목표거리
-`1.0 m`, 성공 허용폭 `±0.08 m`, 연속 유지시간 `5 s`다. ±0.08 m는
-VM/SITL 기준이므로 실제 TF-Luna 로그를 확인한 뒤 조정해야 한다.
-
-## 설치
-
-Raspberry Pi OS에서는 가상환경 사용을 권장.
-
-```bash
-cd daka_rpi
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -e ./laptop_ai
+nvidia-smi
+da-daka-nvidia-check
 ```
 
-Pi에서 OpenCV wheel 설치가 느리거나 실패하면 시스템 패키지를 쓰는 편이 나음.
+`da-daka-nvidia-check`에서 `CUDAExecutionProvider`를 사용할 수 있어야 한다.
+노트북 worker는 CPU-only ONNX Runtime으로 실제 판단을 대신하지 않고 시작을
+거부한다.
+
+## 네트워크 데이터 흐름
+
+| 방향 | UDP 포트 | 데이터 |
+|---|---:|---|
+| Pi → 노트북 | 5600 | 저지연 H.264/MPEG-TS 카메라 영상 |
+| 노트북 → Pi | 5005 | protocol-v2 패널/오염 추론 결과와 heartbeat |
+| Pi → 노트북 | 5006 | `idle/survey/clean` 모드와 활성 패널 ID |
+
+양쪽 설정의 Pi IP, 노트북 IP, `source_id`가 서로 일치해야 한다. receiver는 허용
+IP/source ID, session, 증가하는 sequence/frame, timestamp, 값 범위와 timeout을
+검사한다. IP allowlist는 암호학적 인증이 아니므로 인터넷과 분리된 AP, 방화벽,
+고정 IP 또는 DHCP reservation을 함께 사용한다.
+
+## 설정과 기동
+
+저장소의 숫자는 안전한 기본값 또는 예시일 뿐이다. 아래 `직접 해야 할 작업`을
+끝내기 전에는 승인값을 `true`로 바꾸거나 실제 GPIO 출력을 켜지 않는다.
+
+### 1. 노트북 worker
+
+`laptop_ai/config/laptop_ai.yaml`에서 학습 모델 경로와 실제 Pi IP를 설정한다.
 
 ```bash
-sudo apt update
-sudo apt install python3-opencv
-pip install PyYAML pytest pyserial pymavlink
+source .venv/bin/activate
+da-daka-laptop-ai --config laptop_ai/config/laptop_ai.yaml
 ```
 
-## 실행
-
-기본 카메라 또는 웹캠:
+실제 모델과 영상으로 지연과 정확도를 측정할 때 사용한다.
 
 ```bash
-python main.py --config config/params.yaml --dry-run
+da-daka-segmentation-benchmark \
+  --config laptop_ai/config/laptop_ai.yaml --runs 200
 ```
 
-영상 파일로 테스트:
+Pendulum 기반 optimizer는 측정 프로파일이 없으면 observe-only다. 예시 정확도와
+지연값을 실제 측정으로 교체하기 전에는 encoder/model을 자동 변경하지 않는다.
+
+### 2. Pi stack 진단 기동
+
+다음 상태는 노드를 띄워 토픽, 카메라 스트림과 연결을 진단하기 위한 것이며,
+승인 gate와 실제 분사가 닫혀 있어 전체 미션 시작은 의도적으로 거부된다.
 
 ```bash
-python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-run
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install/setup.bash
+ros2 launch da_daka_control autonomous_cleaning.launch.py \
+  laptop_ip:=<LAPTOP_IP> \
+  video_stream_enabled:=true \
+  configuration_approved:=false \
+  calibration_approved:=false \
+  spray_backend:=mock \
+  spray_output_enabled:=false
 ```
 
-화면 없이 실행:
+### 3. 현장 승인 후 실기체 기동
+
+아래 `<...>`는 복사해서 쓸 값이 아니다. 모두 해당 기체에서 확인한 값으로
+교체하고, 프로펠러 제거 시험부터 단계별 검증을 통과한 뒤 사용한다.
 
 ```bash
-python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-run --no-display
+ros2 launch da_daka_control autonomous_cleaning.launch.py \
+  laptop_ip:=<LAPTOP_IP> \
+  video_stream_enabled:=true \
+  configuration_approved:=true \
+  calibration_approved:=true \
+  spray_backend:=gpio \
+  spray_output_enabled:=true \
+  gpio_chip:=<GPIO_CHIP_PATH> \
+  gpio_line_offset:=<GPIO_LINE_OFFSET> \
+  camera_to_nozzle_forward_m:=<MEASURED_FORWARD_M> \
+  camera_to_nozzle_left_m:=<MEASURED_LEFT_M>
 ```
 
-디버그 영상을 저장하면서 실행:
+stack이 정상이고 비행구역이 통제된 뒤에만 시작한다.
 
 ```bash
-python main.py --config config/params.yaml --video data/sample/test.mp4 --dry-run --no-display --save-video
+ros2 service call /autonomous_cleaning/start std_srvs/srv/Trigger "{}"
 ```
 
-디버그 창이 켜져 있을 때는 `q`를 누르면 종료됨.
-
-## Dry-run 모드
-
-기본값은 안전을 위해 dry-run임.
-
-`mavlink.dry_run: true`이면 Pixhawk로 실제 MAVLink 명령을 보내지 않고 로그만 남김.
-
-`spray.dry_run: true`이면 실제 GPIO, 릴레이, 서보, 액추에이터를 동작시키지 않고 mock 분사 이벤트만 기록함.
-
-실제 기체와 분사 장치를 연결하기 전까지는 이 값을 유지하는 것이 좋음.
-
-설정 파일에서 `mavlink.dry_run` 또는 `spray.dry_run`을 `false`로 바꾸는
-것만으로는 live 출력이 활성화되지 않는다. 승인된 프로펠러 제거 bench
-test에서만 다음 명시적 옵션을 추가할 수 있다.
+운용자가 중단하면 미션은 abort를 latch하고 착륙을 요청한다.
 
 ```bash
-python main.py --config config/params.yaml --allow-legacy-live-output
+ros2 service call /autonomous_cleaning/abort std_srvs/srv/Trigger "{}"
 ```
 
-이 옵션을 사용한 Python MVP와 ROS 2 Mission Manager를 동시에 실행하면
-안 된다.
+주요 상태는 `/autonomous_cleaning/state`, 결과는
+`/autonomous_cleaning/result`, 현재 패널은
+`/autonomous_cleaning/current_panel_id`에서 확인한다.
 
-## LiDAR 처리
+## 코드 밖에서 직접 해야 할 실측·물리·환경 작업
 
-기본 LiDAR backend는 mock임.
+아래 항목은 코드로 임의 생성할 수 없는 배포 입력이다. 확인 결과와 단위,
+측정 조건, 담당자, 날짜를 별도 비행기록에 남긴다.
 
-```yaml
-lidar:
-  backend: "mock"
-```
+### A. 카메라와 좌표계
 
-Mock LiDAR는 설정된 거리값에 약간의 노이즈를 넣어 반환합니다. 실제 LiDAR가 없어도 FSM과 visual servoing 흐름을 테스트할 수 있음.
+| 해야 할 일 | 측정·확인 방법 | 반영 위치 |
+|---|---|---|
+| 1 m 지면 footprint | 장착 완료된 기체를 수평으로 고정하고 카메라 광학 중심부터 평면까지 정확히 1 m를 맞춘 뒤 영상에 잡히는 실제 가로·세로 길이를 잰다. 해상도/렌즈/크롭을 운용 조건과 동일하게 한다. | `panel_survey.yaml`과 `nozzle_visual_servo.yaml`의 `footprint_width_at_1m_m`, `footprint_height_at_1m_m`에 같은 값 |
+| 카메라 장착 자세 | 기체 body 기준 카메라의 고정 roll/pitch/yaw를 캘리브레이션 보드와 알려진 지면점으로 검증한다. 단순 눈대중 값은 쓰지 않는다. | `panel_survey.yaml`의 `camera_mount_*_deg` |
+| 카메라 위치 | 비행제어 좌표 기준점에서 카메라 광학 중심까지의 전방(+forward), 좌측(+left), 위쪽(+up) 거리를 잰다. | `panel_survey.yaml`의 `camera_offset_*_m` |
+| 영상 축 방향 | 영상의 오른쪽/아래쪽에 보이는 물체가 실제 body/ENU 어느 방향인지 기체를 조금씩 이동시켜 확인한다. | 두 YAML의 `image_*_positive_*`, visual servo의 axis/invert 값 |
+| 투영 정확도 | 알려진 여러 지면 좌표와 높이에서 패널 중심 투영 오차를 측정한다. 수평뿐 아니라 허용 tilt 부근도 시험한다. | `tools/panel_projection_check.py`와 `docs/field_diagnostics.md` |
 
-실제 장착 센서는 TF-Luna로 확정됐다. `tf_luna_serial` ROS 2 노드 하나만
-USB/Serial 장치를 열고 9-byte 바이너리 프레임과 checksum을 검증해 meter
-단위 `sensor_msgs/msg/Range` 메시지를 `/distance/raw`로 발행한다. 기존
-Python `SerialLiDARReader`는 ASCII 장치용으로만 유지한다. AI와 대시보드는
-같은 시리얼 장치를 다시 열지 말고 ROS 토픽을 구독해야 한다.
+footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서로 다른 스케일을
+사용하므로 반드시 동일하게 유지한다.
 
-낮은 고도에서는 LiDAR 값이 한 번 튀는 것만으로도 잘못된 접근/후퇴 명령이 나갈 수 있음. 그래서 다음 변수들을 설정할 수 있게 했음.
+### B. 카메라와 분사 노즐
 
-- `lidar.min_valid_distance_m`
-- `lidar.max_valid_distance_m`
-- `lidar.smoothing_window`
-- `lidar.max_jump_m`
+| 해야 할 일 | 기준 |
+|---|---|
+| 수평 오프셋 측정 | 카메라 광학 중심에서 실제 분사점/노즐 축까지 body FLU로 잰다. 기수 방향은 `+forward`, 기체 왼쪽은 `+left`다. 뒤쪽/오른쪽은 음수다. |
+| 분사 거리 결정 | 노즐 높이, 분사 폭, 압력, 액체 도달 범위와 카메라 초점을 함께 시험해 `spray_distance_m`를 정한다. 현재 1.0 m는 검증 전 기준값이다. |
+| 실제 착탄 오차 | 정지된 기체와 안전한 시험대에서 물로 착탄 중심을 반복 측정한다. 노즐 각도, 호스 힘, 밸브 지연, 분사 반동과 바람 때문에 생기는 편차를 확인한다. |
+| 프레임 안전 여유 | 노즐 목표점을 맞췄을 때 패널이 프레임 밖으로 나가지 않고 주변 구조물에 분사하지 않는지 `safe_frame_margin_norm`을 검증한다. |
 
-## 이물질 검출
+실측 수평 오프셋은 launch의 `camera_to_nozzle_forward_m`와
+`camera_to_nozzle_left_m`에 넣는다. 물을 쓰는 시험은 GPIO/배선 bench test와
+정렬 dry-run을 통과한 뒤 프로펠러를 제거한 상태에서 먼저 수행한다.
 
-현재 기본 검출기는 OpenCV 방식임.
+### C. TF-Luna와 높이 기준
 
-```yaml
-detector:
-  backend: "opencv"
-```
+| 해야 할 일 | 기준 |
+|---|---|
+| serial 식별 | Pi에서 `/dev/serial/by-id/`의 실제 TF-Luna 장치명을 확인한다. 재부팅 후에도 같은 경로인지 검증한다. |
+| 물리 장착 | 센서가 아래쪽 지면을 보고 카메라 광축과 최대한 평행하고 가까운 위치에 오도록 단단히 고정한다. 랜딩기어, 호스와 분무가 시야를 가리지 않아야 한다. |
+| 거리 검증 | 알려진 여러 거리와 패널 표면 재질에서 raw/filtered 값, signal strength, dropout을 기록하고 최소/최대 거리와 `minimum_strength`를 정한다. |
+| 기준점 검증 | 코드가 사용하는 LiDAR 거리와 카메라 투영 평면 사이의 물리적 높이 차이가 허용 오차 이내인지 확인한다. 큰 차이가 있으면 장착을 수정하고 투영 오차를 다시 검증한다. |
 
-처리 흐름은 대략 다음과 같음.
+반영 파일은 `tf_luna_serial.yaml`, `distance_filter.yaml`,
+`distance_controller.yaml`, `autonomous_cleaning.yaml`이다. serial 장치는 한
+프로세스만 소유하며, 잘못된 거리나 stale data에서는 이동/분사가 허용되지
+않는지 시험한다.
 
-1. grayscale 변환
-2. blur
-3. threshold
-4. morphology open/close
-5. contour detection
-6. 면적 필터링
-7. 반사 하이라이트 제거
-8. 중심점, bbox, confidence 계산
-9. 우선순위가 높은 후보 선택
+### D. Pixhawk, MAVROS와 PX4
 
-아크릴판 반사 때문에 생기는 흰색 하이라이트는 오염으로 오검출될 수 있음. 이를 줄이기 위해 `detector.reject_specular_highlights`, `detector.specular_v_threshold`, `detector.specular_saturation_max` 값을 두었음.
+| 해야 할 일 | 기준 |
+|---|---|
+| 실제 연결값 | Pixhawk의 `/dev/serial/by-id/...`와 baud를 확인한다. `ttyUSB0`처럼 재부팅 때 바뀔 수 있는 이름보다 by-id를 사용한다. |
+| 단일 serial 소유자 | QGC와 MAVROS를 함께 쓸 때 `mavlink-router`만 serial을 열고 MAVROS는 local UDP를 사용하게 한다. |
+| MAVROS 데이터 | `/mavros/state`, local pose/velocity, battery, system status, extended state와 ARM/mode services가 끊김 없이 갱신되는지 확인한다. |
+| 좌표계/방향 | local ENU 원점, X/Y 이동, body forward/left, yaw 부호가 실제 기체 이동과 일치하는지 무장하지 않은 시험과 SITL에서 확인한다. |
+| PX4 failsafe | OFFBOARD 신호 손실, data-link/RC 손실, 저전압, geofence, 위치 추정 손실 때 Hold/Land 등 현장에 맞는 안전 동작을 PX4에 설정하고 각각 재현한다. |
+| 비상 개입 | 조종기 또는 QGC의 Hold/Land가 항상 자율 임무보다 우선하는지 확인하고 운용자와 안전감시자의 역할을 정한다. |
 
-## AI HAT+ 관련 상태
+센서 캘리브레이션, 프로펠러/모터 방향, 기체 중심, home/local origin과 배터리
+상태가 정상이 아니면 approval gate를 열지 않는다.
 
-AI HAT 연결은 최종 구조에서 사용하지 않는다. `detector.backend: hailo`는
-의도적으로 오류를 내며, OpenCV로 자동 fallback하지 않는다. 실제 추론 경로는
-`laptop_ai/`의 CUDA 전용 binary-segmentation worker 하나다. 학습된 ONNX
-가중치는 배포 입력이므로 저장소가 임의로 생성하지 않으며, 모델 경로와 출력
-contract는 `laptop_ai/config/laptop_ai.yaml`에서 검증한다.
+### E. 실제 GPIO와 분사 구동회로
 
-## 기존 AI·분사 Mission FSM
+| 해야 할 일 | 기준 |
+|---|---|
+| GPIO chip/line | Pi 5의 실제 `gpioinfo` 결과와 배선도를 대조해 chip path와 line offset을 확정한다. 물리 핀 번호, BCM 이름, line offset을 혼동하지 않는다. |
+| 출력 극성 | 밸브가 active-high인지 active-low인지 측정하고 전원 인가/부팅/프로세스 종료 때 기본 OFF인지 확인한다. |
+| 구동회로 | 펌프/솔레노이드를 Pi GPIO에서 직접 구동하지 않는다. 정격에 맞는 MOSFET/relay driver, 별도 actuator 전원, 공통 기준 접지와 유도성 부하 보호를 갖춘다. |
+| 펄스 설정 | 실제 유량으로 `pulse_duration_s`, 최소/최대 pulse, cooldown, session당 최대 횟수를 정한다. |
+| 고장 시험 | 프로세스 강제 종료, Pi 재부팅, 케이블 분리, 네트워크 단절, abort 때 밸브가 OFF로 남는지 확인한다. |
 
-기존 Python MVP의 오염 검출·정렬·분사 흐름은 상태머신으로 관리함.
+처음에는 `backend: mock`, `output_enabled: false`로 ROS 상태만 검증한다. 다음은
+프로펠러와 액체를 제거한 전기 시험, 그 다음은 프로펠러를 제거하고 물을 사용한
+시험 순서다. 사람이 즉시 끊을 수 있는 actuator 전원 차단 수단을 둔다.
 
-구현된 상태는 다음과 같음.
+### F. Pi·노트북 네트워크
 
-- `IDLE`
-- `SEARCH_PANEL`
-- `DETECT_DIRT`
-- `ALIGN_TARGET`
-- `HOLD_DISTANCE`
-- `STOP_BEFORE_SPRAY`
-- `SPRAY`
-- `WAIT_STABILIZE`
-- `VERIFY_CLEAN`
-- `DONE`
-- `RETRY`
-- `ABORT`
+| 해야 할 일 | 기준 |
+|---|---|
+| 주소 확정 | 전용 AP에서 Pi와 노트북에 고정 IP 또는 DHCP reservation을 부여하고 각 설정 파일에 동일하게 반영한다. |
+| 포트/방화벽 | UDP 5600, 5005, 5006만 필요한 방향으로 허용하고 외부 네트워크에서 접근할 수 없게 한다. |
+| 통신 품질 | 실제 비행 거리에서 packet loss, 왕복 지연, jitter, 영상 decode 끊김과 heartbeat timeout을 장시간 측정한다. |
+| 단절 동작 | 영상, 결과, control heartbeat를 각각 끊어 stale 추론으로 이동하거나 분사하지 않고 안전 중단하는지 확인한다. |
+| 전원/부팅 후 주소 | Pi, 노트북, AP를 여러 순서로 재부팅해도 주소와 방화벽 규칙이 유지되는지 확인한다. |
 
-이 FSM은 최종 비행 모드 관리자와 역할이 다르다. ROS 2
-`mission_manager`가 Arm, 이륙, hover, OFFBOARD, 거리제어, Loiter, Land,
-Disarm을 담당하고, 기존 FSM은 향후 오염 검출과 분사 작업을 요청하는 하위
-작업 FSM으로 연결해야 한다.
+### G. NVIDIA GPU와 학습 모델
 
-분사는 아무 때나 발생하지 않습니다. 최소한 아래 조건을 통과해야 함.
+| 해야 할 일 | 기준 |
+|---|---|
+| GPU 환경 | `nvidia-smi`가 GPU/driver를 표시하고 `da-daka-nvidia-check`가 CUDA provider를 확인해야 한다. 실제 모델 benchmark로 CUDA session과 추론까지 이어서 검증한다. |
+| 모델 배치 | 학습·검증된 `dirt_segmentation.onnx`를 `laptop_ai.yaml`의 경로에 둔다. 저장소에는 임의 weight가 포함되어 있지 않다. |
+| 입출력 계약 | 모델이 worker의 RGB `float32 / 255.0` 입력과 일치하는지 확인한다. 출력 shape/channel, logit/probability 의미와 threshold도 설정과 일치해야 한다. |
+| 현장 정확도 | 실제 패널, 오염 종류, 햇빛/그늘/반사/물기 데이터로 false clean과 false dirty를 따로 평가한다. 특히 오염을 깨끗하다고 판정하는 위험을 기록한다. |
+| 성능 | 실제 해상도와 모델로 warm-up 후 추론 지연, decode 지연, GPU memory, 온도/throttling을 측정한다. 전체 결과가 timeout보다 충분히 빨라야 한다. |
 
-- 이물질이 검출되어야 함
-- `mission.required_detection_frames`만큼 연속 확인되어야 함
-- 화면 중심 정렬 오차가 threshold 안에 들어와야 함
-- LiDAR 거리가 목표 범위 안에 있어야 함
-- 정지 상태가 `mission.stable_hold_time_s` 동안 유지되어야 함
-- 분사 쿨다운과 최대 분사 횟수 조건을 만족해야 함
+모델이 없으면 통신과 ROS stack은 진단할 수 있지만 실제 오염 판단과 전체 임무
+검증은 완료할 수 없다. 임의 더미 모델로 approval gate를 통과시키지 않는다.
 
-## 실현가능성에 영향을 주는 변수
+### H. 기구, 전원과 현장 안전
 
-실제 테스트에서 중요한 변수들은 코드 안에 설정값으로 빼 두었음.
+- 카메라, LiDAR, 노즐과 호스를 진동에도 움직이지 않게 고정하고 캘리브레이션
+  뒤에는 장착 위치를 바꾸지 않는다.
+- 물통의 가득 참/비어 있음에 따른 무게중심 변화, 호스 장력, 분사 반동을
+  확인한다. 두 상태 모두에서 PX4 튜닝과 자세 안정성을 검증한다.
+- Pi, 카메라, 통신, 밸브/펌프의 최대 전류와 순간 전류를 측정하고 정격 전원,
+  배선 굵기, 퓨즈와 전압 강하를 검토한다. 모터 전원 노이즈로 Pi가 재부팅되지
+  않는지 시험한다.
+- 분무와 누수로부터 전자장치와 렌즈를 보호하되 냉각과 RF 통신을 막지 않는다.
+- 패널 간 이동 경로의 장애물, propeller clearance, 분사 금지 구역, 사람과의
+  안전거리를 현장에서 측정한다. 코드의 2D 최단 경로는 미확인 장애물을
+  자동으로 회피하는 기능이 아니다.
+- 비행구역 통제, spotter, 비상 착륙 구역, 소화/전원 차단 수단과 해당 지역의
+  운용 규정을 준비한다.
 
-- 아크릴판 반사: `detector.reject_specular_highlights`, `detector.specular_v_threshold`, `detector.specular_saturation_max`
-- 카메라와 판의 위치: `roi`
-- 낮은 고도 여유: `flight.expected_height_min_m`, `flight.expected_height_max_m`
-- LiDAR 신뢰성: `lidar.min_valid_distance_m`, `lidar.max_valid_distance_m`, `lidar.smoothing_window`, `lidar.max_jump_m`
-- 타깃 안정성: `mission.required_detection_frames`, `mission.target_stability_max_jump_px`
-- 호스와 분사 반동 회복: `spray.stabilize_wait_s`, `mission.min_spray_interval_s`
-- 테스트 제한: `safety.max_mission_time_s`, `mission.max_retries`, `mission.max_spray_events`
-- 축 방향 보정: `visual_servo.axis_map`, `visual_servo.invert_x`, `visual_servo.invert_y`, `visual_servo.invert_z`
+## Approval gate를 여는 조건
 
-이 값들은 실제 아크릴판, 조명, 카메라, LiDAR 장착 위치에 따라 반드시 다시 맞춰야 함.
+| Gate | 기본값 | `true` 또는 실제 출력 허용 조건 |
+|---|---:|---|
+| `configuration_approved` | `false` | 실제 IP/port, serial, MAVROS/PX4, GPIO, 비행구역과 경로 안전 설정 검토 완료 |
+| `calibration_approved` | `false` | 카메라 footprint/자세/위치, 영상 축, 노즐 오프셋, LiDAR 거리의 반복 측정과 투영·정렬 시험 통과 |
+| `spray_output_enabled` | `false` | 구동회로, polarity, OFF 기본상태, pulse/cooldown, abort/전원 고장 시험 통과 |
+| `require_live_spray` | `true` | 운영 mission에서는 유지한다. 실제 분사 output이 없으면 PRECHECK가 실패해야 한다. |
 
-## 로그
+승인은 “값을 파일에 입력했다”는 의미가 아니라 측정 기록과 아래 시험의 통과를
+검토했다는 의미다. launch가 종료되면 다시 안전 기본값에서 시작하는 운용을
+권장한다.
 
-기존 Python MVP에서 `debug.save_logs: true`이면 실행 로그가 저장됨.
+## 단계별 검증 체크리스트
 
-```text
-logs/mission_YYYYMMDD_HHMMSS.csv
-logs/mission_YYYYMMDD_HHMMSS.jsonl
-```
+한 단계를 통과하지 못하면 다음 단계로 넘어가지 않는다.
 
-로그에는 다음 정보가 들어감.
+1. **정적 검사와 단위 테스트** — Python, YAML/XML, ROS build/test를 통과한다.
+2. **녹화 영상 재생** — 실제 환경 영상으로 패널 선택, 오염 판정, 결과 freshness,
+   다중 패널 오선택을 검증한다.
+3. **ROS dry-run** — mock 분사로 노드, 토픽, 서비스, mode heartbeat와 상태
+   전이를 확인한다. ARM 서비스는 호출하지 않는다.
+4. **GPIO bench** — 프로펠러/액체 제거 상태에서 line, polarity, pulse, cooldown,
+   강제 종료 OFF를 계측한다.
+5. **PX4 SITL** — 전체 임무, AI/LiDAR/MAVROS 단절, OFFBOARD 해제, abort,
+   재분사 제한과 원점 착륙을 시험한다.
+6. **계류 이륙/측량** — 안전하게 계류하고 이륙, 3 m 유지, yaw, 패널 지도만
+   확인한다. 분사 출력은 끈다.
+7. **무수분 저고도 이동/정렬** — 물 없이 단일 패널 접근, 프레임 감속, 거리,
+   헤딩, 노즐 목표점과 복귀를 확인한다.
+8. **단일 패널 분사** — 통제구역에서 한 패널에 한 번 분사하고 착탄과 재검증을
+   확인한다.
+9. **복수 랜덤 패널** — 여러 배치를 반복해 지도 중복/누락, 경로, clean skip,
+   dirty retry와 최종 착륙을 검증한다.
 
-- FSM 상태
-- 이물질 검출 여부
-- 중심점
-- bbox
-- 면적
-- confidence
-- 화면 중심 오차
-- LiDAR 거리
-- 생성된 명령
-- 분사 이벤트
-- retry 횟수
-- detection streak
-- spray count
+각 단계에서 성공 조건, 입력 설정 SHA/파일, rosbag/로그, 실제 배치와 실패 원인을
+남긴다. 테스트용 override와 실제 운용 설정을 섞지 않는다.
 
-실제 시험에서는 이 로그를 보고 threshold와 거리 조건을 조정하는 것이 좋음.
+## 테스트와 CI
 
-ROS 2 Mission Manager는 별도로 미션 상태, PX4 상태, 거리, 속도, 실패
-원인과 운전자 override를 CSV로 자동 저장한다.
-
-## 테스트
+GitHub Actions의 `Full software audit`는 Python 3.12 정적 파싱/단위 테스트와
+ROS 2 Jazzy container의 `rosdep`, `colcon build`, `colcon test`를 수행한다.
+로컬 Python 검사는 다음과 같다.
 
 ```bash
-cd daka_rpi
-python -m pytest tests
+python -m compileall -q \
+  actuator control sensors utils vision tests tools \
+  laptop_ai/laptop_ai laptop_ai/tests \
+  ros2_ws/src/da_daka_control/da_daka_control \
+  ros2_ws/src/da_daka_control/launch \
+  ros2_ws/src/da_daka_control/test
+
+python -m pytest -q tests
+python -m pytest -q laptop_ai/tests
+
+PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
+  ros2_ws/src/da_daka_control/test/test_autonomous_cleaning_fsm.py \
+  ros2_ws/src/da_daka_control/test/test_autonomous_cleaning_integration.py \
+  ros2_ws/src/da_daka_control/test/test_nozzle_alignment.py \
+  ros2_ws/src/da_daka_control/test/test_panel_mapping.py \
+  ros2_ws/src/da_daka_control/test/test_perception_protocol.py \
+  ros2_ws/src/da_daka_control/test/test_route_planner.py \
+  ros2_ws/src/da_daka_control/test/test_spray_actuator.py \
+  ros2_ws/src/da_daka_control/test/test_video_streamer.py
 ```
 
-현재 Python 테스트는 다음을 확인함.
+## 관련 문서
 
-- visual servoing 방향 명령
-- Mission FSM 전이
-- synthetic image 기반 이물질 검출
-- 아크릴판 반사 하이라이트 제거
-- LiDAR 거리 범위 검증
-- LiDAR smoothing
-- LiDAR jump rejection
-- legacy live-output 명시적 승인 guard
+- [최종 자율 청소 구조](docs/autonomous_cleaning_architecture.md)
+- [현장 좌표·카메라 진단](docs/field_diagnostics.md)
+- [안전한 Pi main 동기화 프롬프트](docs/pi_safe_main_sync_prompt.md)
+- [브랜치 통합 감사 기록](docs/branch_consolidation.md)
+- [노트북 AI worker](laptop_ai/README.md)
+- [모바일 카메라 진단 릴레이](docs/mobile_camera_relay.md)
 
-## 실제 기체 테스트 전 안전 절차
-
-실제 MAVLink 출력이나 실제 분사 장치를 연결하기 전에 아래 순서를 고려.
-
-1. 프로펠러 제거 상태에서 소프트웨어만 테스트
-2. MAVLink dry-run으로 로그 확인
-3. SITL에서 setpoint 흐름 확인
-4. 아크릴판 위에서 LiDAR 거리값 실측 비교
-5. 실제 조명 아래에서 아크릴판 반사와 이물질 검출 확인
-6. mock 분사 테스트
-7. 프로펠러 제거 상태에서 실제 분사 액추에이터 테스트
-8. 계류 상태에서 기체 반응 확인
-9. 상대 이륙고도 `1.1 m`와 LiDAR 목표거리 `1.0 m`의 의미와 장착
-   오프셋 확인
-10. QGC Hold/Land 개입 시 OFFBOARD 자동 재진입이 차단되는지 확인
-11. 축 방향, failsafe, 분사 조건을 모두 확인한 뒤 제한된 공간에서 저속
-    비행시험
-
-## 실제 하드웨어 연결 시 수정할 곳
-
-실제 장비를 붙일 때는 아래 파일들을 우선 확인하면 됨.
-
-- `config/params.yaml`: 과거 bench MVP의 OpenCV/dry-run 시험에만 사용
-- `control/visual_servo.py`: ROS 이동명령 인터페이스가 확정될 때까지
-  dry-run 검증에만 사용
-- ROS 2 TF-Luna 노드의 실제 표면별 신호 세기와 거리 안정성 검증
-- `ros2_ws/src/da_daka_control/config`: 1.0 m 거리제어와 Mission Manager
-  설정 조정
-- `mavlink-router.conf`: Pixhawk Serial, MAVROS local UDP, QGC remote UDP
-  endpoint 확정
-- `control/mavlink_bridge.py`: 최종 live 구조에서는 비활성화하고, ROS 2
-  Mission Manager와 동시에 실행하지 않음
-- `ros2_ws/src/da_daka_control/config/spray_controller.yaml`: 실제 GPIO line,
-  polarity, pulse/cooldown/count 제한 설정
-- `ros2_ws/src/da_daka_control/config/panel_survey.yaml`: 실측 camera footprint와
-  장착 변환 설정
-- `laptop_ai/config/laptop_ai.yaml`: 노트북 IP, 학습된 ONNX 모델과 CUDA 성능 설정
-
-정렬 조건과 LiDAR 거리 조건이 로그에서 안정적으로 확인되기 전에는 실제 분사를 켜지 않는 것이 좋음.
+이 저장소의 `main`은 최종 소프트웨어 기준선이다. 실제 기체별 값은 예시와
+분리해 관리하고, 실측·bench·SITL·단계별 실기 시험 기록 없이는 비행 준비 완료로
+표시하지 않는다.
