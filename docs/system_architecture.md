@@ -1,5 +1,9 @@
 # DA-DAKA 탑재 제어 구조
 
+> 이 문서는 초기 거리제어 통합의 역사적 기준이다. 2026-08-16 이후 실제
+> 최종 실행 구조와 인터페이스는 `autonomous_cleaning_architecture.md`가
+> 우선하며, 브랜치 통합 결과는 `branch_consolidation.md`를 따른다.
+
 ## 목적
 
 Raspberry Pi 5를 기체 탑재 companion computer로 사용하여 센서 처리,
@@ -48,7 +52,7 @@ TF-Luna Serial도 실제 ROS 드라이버 하나만 점유한다. 기존
 - 별도의 pymavlink/MAVSDK 이동제어 코드
 - 실제 명령 기능이 연결된 대시보드
 
-최종 구조에서는 ROS 2 `mission_manager`가 유일한 미션 순서·PX4 모드
+최종 구조에서는 ROS 2 `autonomous_cleaning_mission`이 유일한 미션 순서·PX4 모드
 전환 권한자가 된다. 활성화된 `distance_controller`는 거리 오차에 따른
 속도 setpoint만 발행한다. AI는 오염 후보와 정렬 오차를 토픽으로 제공하고,
 분사제어는 서비스 요청을 처리하며, 각 기능이 독립적으로 PX4 모드를
@@ -127,8 +131,10 @@ QGC/PX4에 있다. RC 입력은 이 운용 구조에서 사용하지 않는다.
 | `/distance_control/enabled` | `std_msgs/msg/Bool` | 실제 ON/OFF 상태 |
 | `/distance_control/target_reached` | `std_msgs/msg/Bool` | 거리 안정 도달 |
 
-AI와 분사 통합 토픽·서비스는 아직 확정되지 않았다. 확정 전에는 기존
-Python FSM을 ROS Mission Manager에 직접 합치지 않는다.
+최종 통합에서는 `/ai/perception`, `/panel_survey/map`,
+`/nozzle_visual_servo/cmd_vel`, `/spray/enable`, `/spray/trigger`와
+`/autonomous_cleaning/start`가 구현됐다. 타입 정의는
+`da_daka_interfaces`, 전체 연결은 `autonomous_cleaning.launch.py`에 있다.
 
 ## 안전 요구사항
 
@@ -144,27 +150,16 @@ Python FSM을 ROS Mission Manager에 직접 합치지 않는다.
    통과한 경우에만 허용한다.
 8. 카메라와 AI 부하가 제어 주기를 방해하지 않는지 최악 조건에서 측정한다.
 
-## Raspberry Pi 이전 전 남은 작업
+## Raspberry Pi 배포 전 남은 현물 입력·검증
 
-- Raspberry Pi 운영체제는 Debian 13 arm64 호스트로 확정
-- Ubuntu 24.04 기반 컨테이너에 ROS 2 Jazzy와 MAVROS 설치
-- Pixhawk 실제 serial 장치 및 baud 확인
-- `mavlink-router`의 local MAVROS/QGC endpoint 설정
-- TF-Luna 전용 frame parser와 `/distance/raw` ROS 노드의 실환경 검증
-- TF-Luna와 카메라의 단일 장치 소유자 확정
-- AI 검출 결과의 ROS 메시지 정의
-- 이동 명령과 분사 서비스 인터페이스 정의
-- 기존 Python FSM과 ROS Mission Manager 중 최종 단일 FSM 확정
-- PX4 OFFBOARD-loss와 data-link-loss 설정 및 시험
-- PX4에서 사용하지 않는 RC 모드 입력과 매핑이 비활성인지 확인
-- 프로펠러 제거 벤치 테스트 후 단계별 실기체 시험
+- Pixhawk serial 장치/baud와 `mavlink-router` endpoint 확정
+- 학습·검증된 오염 세그멘테이션 ONNX 모델 배치
+- TF-Luna/카메라/노즐 장착 변환과 GPIO 회로 실측
+- 노트북 GPU 지연과 Pi↔노트북 가용 대역폭 프로파일 측정
+- PX4 OFFBOARD-loss/data-link-loss 설정, SITL 및 단계별 실기체 시험
 
 ## 저장소 브랜치 관계
 
-- `main`: Raspberry Pi Python MVP
-- `codex/dashboard-ai-tools`: React/Vite 대시보드와 카메라 스트림 도구
-- 이 브랜치: `main`을 기준으로 ROS 2 거리제어 패키지와 구조 문서 추가
-
-대시보드 브랜치는 아직 이 브랜치에 병합하지 않는다. 현재 대시보드의
-텔레메트리 서비스와 명령 서비스는 mock이므로, 실제 ROS/MAVLink backend를
-설계한 뒤 별도 통합한다.
+기능 브랜치의 유효 모듈은 최종 `main`으로 통합하고 원격 브랜치를 제거한다.
+정확한 원본 tip, 흡수 파일과 고정 격자/mock 제어를 제외한 이유는
+`branch_consolidation.md`에 기록되어 있다.

@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+width=1920
+height=1080
+timeout_ms=900
+interval_ms=120
+shutter_us=1000
+output=
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --width) width="$2"; shift 2 ;;
+        --height) height="$2"; shift 2 ;;
+        --timeout) timeout_ms="$2"; shift 2 ;;
+        --timelapse) interval_ms="$2"; shift 2 ;;
+        --shutter) shutter_us="$2"; shift 2 ;;
+        --output|-o) output="$2"; shift 2 ;;
+        --denoise|--autofocus-mode) shift 2 ;;
+        --nopreview|--zsl) shift ;;
+        *) shift ;;
+    esac
+done
+
+if [ -z "$output" ]; then
+    echo "camera proxy wrapper: missing --output" >&2
+    exit 2
+fi
+
+exec curl --fail --silent --show-error --get \
+    --data-urlencode "width=$width" \
+    --data-urlencode "height=$height" \
+    --data-urlencode "timeout_ms=$timeout_ms" \
+    --data-urlencode "interval_ms=$interval_ms" \
+    --data-urlencode "shutter_us=$shutter_us" \
+    "http://127.0.0.1:18765/capture" \
+    --output "$output"

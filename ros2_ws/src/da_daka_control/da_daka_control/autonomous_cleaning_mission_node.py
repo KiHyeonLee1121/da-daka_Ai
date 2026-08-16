@@ -1,0 +1,1471 @@
+"""Run the complete Pi-owned survey, clean, verify and return mission."""
+
+import json
+import math
+import time
+from typing import Callable, Optional
+
+from da_daka_control.autonomous_cleaning_fsm import (
+    AutonomousCleaningFsm,
+    CleaningMissionState,
+)
+from da_daka_control.mission_manager_node import StableWindow, status_failures
+from da_daka_control.panel_distance_mission_fsm import (
+    advance_slowed_position_setpoint,
+    lidar_referenced_local_z_target,
+    StableYawReference,
+    wrapped_yaw_error,
+)
+from da_daka_control.panel_mapping import PanelTarget
+from da_daka_control.panel_mission_fsm import StableArrival
+from da_daka_control.route_planner import plan_panel_route
+from da_daka_interfaces.msg import PanelMap, PerceptionResult
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from mavros_msgs.msg import ExtendedState, State, SysStatus
+from mavros_msgs.srv import CommandBool, SetMode
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import BatteryState, Range
+from std_msgs.msg import Bool, Float32, Int32, String
+from std_srvs.srv import SetBool, Trigger
+
+
+class AutonomousCleaningMissionNode(Node):
+    """Own MAVROS setpoints and coordinate every panel from one Pi FSM."""
+
+    ON_GROUND = 1
+    POSITION_STATES = {
+        CleaningMissionState.TRANSIT,
+        CleaningMissionState.SLOW_APPROACH,
+        CleaningMissionState.REACQUIRE,
+        CleaningMissionState.ASSESS,
+        CleaningMissionState.RETURN_HOME,
+    }
+    VELOCITY_STATES = {
+        CleaningMissionState.TAKEOFF,
+        CleaningMissionState.DESCEND,
+        CleaningMissionState.PRECISION_ALIGN,
+        CleaningMissionState.SPRAY,
+        CleaningMissionState.VERIFY,
+    }
+
+    def __init__(self) -> None:
+        super().__init__('autonomous_cleaning_mission')
+        self._declare_parameters()
+        self._load_parameters()
+        self._fsm = AutonomousCleaningFsm(self._max_spray_attempts)
+        self._arrival = StableArrival(
+            self._arrival_tolerance_m,
+            self._arrival_max_speed_mps,
+            self._arrival_stable_s,
+        )
+        self._launch_yaw_stability = StableYawReference(
+            self._launch_yaw_stable_s,
+            self._launch_yaw_max_deviation_rad,
+        )
+        self._perception_window = StableWindow(self._perception_stable_s)
+        self._alignment_window = StableWindow(self._alignment_stable_s)
+
+        latched_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._state_publisher = self.create_publisher(
+            String, '/autonomous_cleaning/state', latched_qos
+        )
+        self._result_publisher = self.create_publisher(
+            String, '/autonomous_cleaning/result', latched_qos
+        )
+        self._survey_publisher = self.create_publisher(
+            Bool, '/panel_survey/active', latched_qos
+        )
+        self._ai_mode_publisher = self.create_publisher(
+            String, '/ai/requested_mode', latched_qos
+        )
+        self._panel_id_publisher = self.create_publisher(
+            Int32, '/autonomous_cleaning/current_panel_id', latched_qos
+        )
+        self._yaw_target_publisher = self.create_publisher(
+            Float32, '/vertical_control/yaw_target', qos_profile_sensor_data
+        )
+        self._position_publisher = self.create_publisher(
+            PoseStamped,
+            '/mavros/setpoint_position/local',
+            qos_profile_sensor_data,
+        )
+        self._velocity_publisher = self.create_publisher(
+            TwistStamped,
+            '/mavros/setpoint_velocity/cmd_vel',
+            qos_profile_sensor_data,
+        )
+        self.create_service(
+            Trigger, '/autonomous_cleaning/start', self._start_callback
+        )
+        self.create_service(
+            Trigger, '/autonomous_cleaning/abort', self._abort_callback
+        )
+
+        self._create_subscriptions(latched_qos)
+        self._arm_client = self.create_client(
+            CommandBool, '/mavros/cmd/arming'
+        )
+        self._mode_client = self.create_client(SetMode, '/mavros/set_mode')
+        self._takeoff_client = self.create_client(
+            SetBool, '/local_takeoff/enable'
+        )
+        self._distance_client = self.create_client(
+            SetBool, '/distance_control/enable'
+        )
+        self._spray_enable_client = self.create_client(
+            SetBool, '/spray/enable'
+        )
+        self._spray_trigger_client = self.create_client(
+            Trigger, '/spray/trigger'
+        )
+        self._spray_stop_client = self.create_client(
+            Trigger, '/spray/stop'
+        )
+
+        self._initialize_runtime_state()
+        self._publish_state()
+        self._publish_result('IDLE')
+        self._publish_survey(False)
+        self._publish_ai_mode('idle')
+        self.create_timer(1.0 / self._tick_rate_hz, self._tick)
+        self.get_logger().info(
+            'Autonomous cleaning mission ready; explicit start required; '
+            f'configuration_approved={self._configuration_approved}'
+        )
+
+    def _declare_parameters(self) -> None:
+        self.declare_parameter('configuration_approved', False)
+        self.declare_parameter('calibration_approved', False)
+        self.declare_parameter('require_live_spray', True)
+        self.declare_parameter('survey_duration_s', 3.0)
+        self.declare_parameter('spray_distance_m', 1.0)
+        self.declare_parameter('maximum_survey_panels', 32)
+        self.declare_parameter('max_spray_attempts', 3)
+        self.declare_parameter('arrival_tolerance_m', 0.25)
+        self.declare_parameter('arrival_max_speed_mps', 0.10)
+        self.declare_parameter('arrival_stable_s', 1.0)
+        self.declare_parameter('cruise_speed_mps', 0.65)
+        self.declare_parameter('panel_visible_speed_mps', 0.18)
+        self.declare_parameter('horizontal_accel_mps2', 0.50)
+        self.declare_parameter('horizontal_slow_zone_m', 1.0)
+        self.declare_parameter('minimum_approach_speed_mps', 0.10)
+        self.declare_parameter('target_snap_distance_m', 0.05)
+        self.declare_parameter('maximum_vertical_setpoint_speed_mps', 0.20)
+        self.declare_parameter('lidar_z_gain', 1.0)
+        self.declare_parameter('lidar_z_tolerance_m', 0.10)
+        self.declare_parameter('lidar_z_max_offset_m', 0.35)
+        self.declare_parameter('reacquire_radius_m', 0.25)
+        self.declare_parameter('reacquire_period_s', 5.0)
+        self.declare_parameter('prestream_s', 2.0)
+        self.declare_parameter('perception_stable_s', 0.5)
+        self.declare_parameter('alignment_stable_s', 0.7)
+        self.declare_parameter('verification_settle_s', 1.0)
+        self.declare_parameter('yaw_tolerance_deg', 5.0)
+        self.declare_parameter('launch_yaw_stable_s', 1.0)
+        self.declare_parameter('launch_yaw_max_deviation_deg', 2.0)
+        self.declare_parameter('sensor_timeout_s', 0.4)
+        self.declare_parameter('telemetry_timeout_s', 0.5)
+        self.declare_parameter('perception_timeout_s', 0.7)
+        self.declare_parameter('status_timeout_s', 3.0)
+        self.declare_parameter('state_timeout_s', 40.0)
+        self.declare_parameter('takeoff_timeout_s', 45.0)
+        self.declare_parameter('survey_timeout_s', 15.0)
+        self.declare_parameter('reacquire_timeout_s', 20.0)
+        self.declare_parameter('verification_timeout_s', 20.0)
+        self.declare_parameter('minimum_battery_remaining', 0.15)
+        self.declare_parameter('require_enabled_sensors_healthy', True)
+        self.declare_parameter('ignored_unhealthy_sensor_mask', 0)
+        self.declare_parameter('loiter_mode', 'AUTO.LOITER')
+        self.declare_parameter('land_mode', 'AUTO.LAND')
+        self.declare_parameter('tick_rate_hz', 20.0)
+        self.declare_parameter('action_retry_s', 1.0)
+
+    def _load_parameters(self) -> None:
+        def value(name: str):
+            return self.get_parameter(name).value
+
+        self._configuration_approved = bool(value('configuration_approved'))
+        self._calibration_approved = bool(value('calibration_approved'))
+        self._require_live_spray = bool(value('require_live_spray'))
+        self._survey_duration_s = float(value('survey_duration_s'))
+        self._spray_distance_m = float(value('spray_distance_m'))
+        self._maximum_survey_panels = int(value('maximum_survey_panels'))
+        self._max_spray_attempts = int(value('max_spray_attempts'))
+        self._arrival_tolerance_m = float(value('arrival_tolerance_m'))
+        self._arrival_max_speed_mps = float(value('arrival_max_speed_mps'))
+        self._arrival_stable_s = float(value('arrival_stable_s'))
+        self._cruise_speed_mps = float(value('cruise_speed_mps'))
+        self._visible_speed_mps = float(value('panel_visible_speed_mps'))
+        self._horizontal_accel_mps2 = float(value('horizontal_accel_mps2'))
+        self._horizontal_slow_zone_m = float(value('horizontal_slow_zone_m'))
+        self._minimum_approach_speed_mps = float(
+            value('minimum_approach_speed_mps')
+        )
+        self._target_snap_distance_m = float(value('target_snap_distance_m'))
+        self._maximum_vertical_speed_mps = float(
+            value('maximum_vertical_setpoint_speed_mps')
+        )
+        self._lidar_z_gain = float(value('lidar_z_gain'))
+        self._lidar_z_tolerance_m = float(value('lidar_z_tolerance_m'))
+        self._lidar_z_max_offset_m = float(value('lidar_z_max_offset_m'))
+        self._reacquire_radius_m = float(value('reacquire_radius_m'))
+        self._reacquire_period_s = float(value('reacquire_period_s'))
+        self._prestream_s = float(value('prestream_s'))
+        self._perception_stable_s = float(value('perception_stable_s'))
+        self._alignment_stable_s = float(value('alignment_stable_s'))
+        self._verification_settle_s = float(value('verification_settle_s'))
+        self._yaw_tolerance_rad = math.radians(float(value('yaw_tolerance_deg')))
+        self._launch_yaw_stable_s = float(value('launch_yaw_stable_s'))
+        self._launch_yaw_max_deviation_rad = math.radians(
+            float(value('launch_yaw_max_deviation_deg'))
+        )
+        self._sensor_timeout_s = float(value('sensor_timeout_s'))
+        self._telemetry_timeout_s = float(value('telemetry_timeout_s'))
+        self._perception_timeout_s = float(value('perception_timeout_s'))
+        self._status_timeout_s = float(value('status_timeout_s'))
+        self._state_timeout_s = float(value('state_timeout_s'))
+        self._takeoff_timeout_s = float(value('takeoff_timeout_s'))
+        self._survey_timeout_s = float(value('survey_timeout_s'))
+        self._reacquire_timeout_s = float(value('reacquire_timeout_s'))
+        self._verification_timeout_s = float(value('verification_timeout_s'))
+        self._minimum_battery = float(value('minimum_battery_remaining'))
+        self._require_health = bool(value('require_enabled_sensors_healthy'))
+        self._ignored_health = int(value('ignored_unhealthy_sensor_mask'))
+        self._loiter_mode = str(value('loiter_mode'))
+        self._land_mode = str(value('land_mode'))
+        self._tick_rate_hz = float(value('tick_rate_hz'))
+        self._action_retry_s = float(value('action_retry_s'))
+        positive = (
+            self._survey_duration_s,
+            self._spray_distance_m,
+            self._arrival_tolerance_m,
+            self._arrival_max_speed_mps,
+            self._arrival_stable_s,
+            self._cruise_speed_mps,
+            self._visible_speed_mps,
+            self._horizontal_accel_mps2,
+            self._horizontal_slow_zone_m,
+            self._minimum_approach_speed_mps,
+            self._target_snap_distance_m,
+            self._maximum_vertical_speed_mps,
+            self._lidar_z_gain,
+            self._lidar_z_tolerance_m,
+            self._lidar_z_max_offset_m,
+            self._reacquire_period_s,
+            self._prestream_s,
+            self._tick_rate_hz,
+        )
+        if any(item <= 0.0 for item in positive):
+            raise ValueError('mission motion/timing parameters must be positive')
+        if self._visible_speed_mps > self._cruise_speed_mps:
+            raise ValueError('panel-visible speed must not exceed cruise speed')
+        if self._maximum_survey_panels <= 0 or self._max_spray_attempts <= 0:
+            raise ValueError('panel/attempt limits must be positive')
+
+    def _create_subscriptions(self, latched_qos) -> None:
+        self.create_subscription(State, '/mavros/state', self._state_cb, 10)
+        self.create_subscription(
+            ExtendedState, '/mavros/extended_state', self._extended_cb, 10
+        )
+        self.create_subscription(
+            PoseStamped,
+            '/mavros/local_position/pose',
+            self._pose_cb,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            TwistStamped,
+            '/mavros/local_position/velocity_local',
+            self._velocity_cb,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            BatteryState, '/mavros/battery', self._battery_cb, 10
+        )
+        self.create_subscription(SysStatus, '/mavros/sys_status', self._sys_cb, 10)
+        self.create_subscription(
+            Range, '/distance/filtered', self._range_cb, qos_profile_sensor_data
+        )
+        self.create_subscription(
+            PanelMap, '/panel_survey/map', self._panel_map_cb, latched_qos
+        )
+        self.create_subscription(
+            PerceptionResult,
+            '/ai/perception',
+            self._perception_cb,
+            latched_qos,
+        )
+        self.create_subscription(Bool, '/ai/health', self._ai_health_cb, latched_qos)
+        self.create_subscription(
+            TwistStamped,
+            '/distance_control/cmd_vel_internal',
+            self._distance_command_cb,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            TwistStamped,
+            '/visual_servo/cmd_vel_xy',
+            self._visual_command_cb,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Bool,
+            '/visual_servo/aligned',
+            self._visual_aligned_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/visual_servo/target_valid',
+            self._visual_valid_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/visual_servo/panel_visible',
+            self._panel_visible_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/distance_control/enabled',
+            self._distance_enabled_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/distance_control/target_reached',
+            self._distance_reached_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/local_takeoff/enabled',
+            self._takeoff_enabled_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/local_takeoff/target_reached',
+            self._takeoff_reached_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            String,
+            '/vertical_control/mode',
+            self._vertical_mode_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/altitude_guard/triggered',
+            self._altitude_guard_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            String, '/spray/status', self._spray_status_cb, 10
+        )
+        self.create_subscription(
+            String, '/mission/state', self._legacy_mission_cb, latched_qos
+        )
+        self.create_subscription(
+            String,
+            '/panel_distance_mission/state',
+            self._panel_mission_cb,
+            latched_qos,
+        )
+
+    def _initialize_runtime_state(self) -> None:
+        self._connected = False
+        self._armed = False
+        self._mode = ''
+        self._landed_state: Optional[int] = None
+        self._extended_time_s: Optional[float] = None
+        self._pose_xyz: Optional[tuple[float, float, float]] = None
+        self._yaw_rad: Optional[float] = None
+        self._pose_time_s: Optional[float] = None
+        self._velocity_xyz: Optional[tuple[float, float, float]] = None
+        self._velocity_time_s: Optional[float] = None
+        self._battery_remaining: Optional[float] = None
+        self._battery_time_s: Optional[float] = None
+        self._sensors_enabled: Optional[int] = None
+        self._sensors_health: Optional[int] = None
+        self._sys_time_s: Optional[float] = None
+        self._distance_m: Optional[float] = None
+        self._range_min_m = 0.0
+        self._range_max_m = 0.0
+        self._range_time_s: Optional[float] = None
+        self._ground_xyz: Optional[tuple[float, float, float]] = None
+        self._launch_xyz: Optional[tuple[float, float, float]] = None
+        self._launch_yaw_rad: Optional[float] = None
+        self._panel_map: Optional[PanelMap] = None
+        self._perception: Optional[PerceptionResult] = None
+        self._perception_time_s: Optional[float] = None
+        self._ai_healthy = False
+        self._distance_command: Optional[TwistStamped] = None
+        self._distance_command_time_s: Optional[float] = None
+        self._visual_command: Optional[TwistStamped] = None
+        self._visual_command_time_s: Optional[float] = None
+        self._visual_aligned = False
+        self._visual_valid = False
+        self._panel_visible = False
+        self._distance_enabled = False
+        self._distance_reached = False
+        self._takeoff_enabled = False
+        self._takeoff_reached = False
+        self._vertical_mode = 'DISABLED'
+        self._altitude_guard_triggered = False
+        self._spray_output_enabled: Optional[bool] = None
+        self._legacy_mission_state = 'IDLE'
+        self._panel_mission_state = 'IDLE'
+        self._state_started_s = time.monotonic()
+        self._stage = 'IDLE'
+        self._stage_started_s = self._state_started_s
+        self._control_kind = 'none'
+        self._command_xyz: Optional[tuple[float, float, float]] = None
+        self._setpoint_speed_mps = 0.0
+        self._last_setpoint_s = self._state_started_s
+        self._survey_started_s: Optional[float] = None
+        self._verify_started_s: Optional[float] = None
+        self._pending_action: Optional[str] = None
+        self._last_action_s: dict[str, float] = {}
+        self._spray_session_enabled = False
+        self._abort_land_requested = False
+
+    # -- telemetry callbacks -------------------------------------------------
+
+    def _state_cb(self, message: State) -> None:
+        self._connected = bool(message.connected)
+        self._armed = bool(message.armed)
+        self._mode = str(message.mode)
+
+    def _extended_cb(self, message: ExtendedState) -> None:
+        self._landed_state = int(message.landed_state)
+        self._extended_time_s = time.monotonic()
+        self._capture_ground()
+
+    def _pose_cb(self, message: PoseStamped) -> None:
+        position = message.pose.position
+        values = (float(position.x), float(position.y), float(position.z))
+        if not all(math.isfinite(value) for value in values):
+            return
+        orientation = message.pose.orientation
+        quaternion = (
+            float(orientation.x),
+            float(orientation.y),
+            float(orientation.z),
+            float(orientation.w),
+        )
+        norm = math.sqrt(sum(value * value for value in quaternion))
+        if not all(math.isfinite(value) for value in quaternion) or norm <= 1e-6:
+            return
+        x, y, z, w = (value / norm for value in quaternion)
+        self._yaw_rad = math.atan2(
+            2.0 * (w * z + x * y),
+            1.0 - 2.0 * (y * y + z * z),
+        )
+        now_s = time.monotonic()
+        self._pose_xyz = values
+        self._pose_time_s = now_s
+        if not self._armed:
+            self._launch_yaw_stability.update(self._yaw_rad, now_s)
+        self._capture_ground()
+
+    def _velocity_cb(self, message: TwistStamped) -> None:
+        linear = message.twist.linear
+        values = (float(linear.x), float(linear.y), float(linear.z))
+        if all(math.isfinite(value) for value in values):
+            self._velocity_xyz = values
+            self._velocity_time_s = time.monotonic()
+
+    def _battery_cb(self, message: BatteryState) -> None:
+        remaining = float(message.percentage)
+        self._battery_remaining = remaining if math.isfinite(remaining) else None
+        self._battery_time_s = time.monotonic()
+
+    def _sys_cb(self, message: SysStatus) -> None:
+        self._sensors_enabled = int(message.onboard_control_sensors_enabled)
+        self._sensors_health = int(message.onboard_control_sensors_health)
+        self._sys_time_s = time.monotonic()
+
+    def _range_cb(self, message: Range) -> None:
+        distance_m = float(message.range)
+        if not math.isfinite(distance_m):
+            return
+        self._distance_m = distance_m
+        self._range_min_m = float(message.min_range)
+        self._range_max_m = float(message.max_range)
+        self._range_time_s = time.monotonic()
+
+    def _panel_map_cb(self, message: PanelMap) -> None:
+        self._panel_map = message
+
+    def _perception_cb(self, message: PerceptionResult) -> None:
+        self._perception = message
+        self._perception_time_s = time.monotonic()
+
+    def _ai_health_cb(self, message: Bool) -> None:
+        self._ai_healthy = bool(message.data)
+
+    def _distance_command_cb(self, message: TwistStamped) -> None:
+        self._distance_command = message
+        self._distance_command_time_s = time.monotonic()
+
+    def _visual_command_cb(self, message: TwistStamped) -> None:
+        self._visual_command = message
+        self._visual_command_time_s = time.monotonic()
+
+    def _visual_aligned_cb(self, message: Bool) -> None:
+        self._visual_aligned = bool(message.data)
+
+    def _visual_valid_cb(self, message: Bool) -> None:
+        self._visual_valid = bool(message.data)
+
+    def _panel_visible_cb(self, message: Bool) -> None:
+        self._panel_visible = bool(message.data)
+
+    def _distance_enabled_cb(self, message: Bool) -> None:
+        self._distance_enabled = bool(message.data)
+
+    def _distance_reached_cb(self, message: Bool) -> None:
+        self._distance_reached = bool(message.data)
+
+    def _takeoff_enabled_cb(self, message: Bool) -> None:
+        self._takeoff_enabled = bool(message.data)
+
+    def _takeoff_reached_cb(self, message: Bool) -> None:
+        self._takeoff_reached = bool(message.data)
+
+    def _vertical_mode_cb(self, message: String) -> None:
+        self._vertical_mode = str(message.data)
+
+    def _altitude_guard_cb(self, message: Bool) -> None:
+        self._altitude_guard_triggered = bool(message.data)
+
+    def _spray_status_cb(self, message: String) -> None:
+        try:
+            status = json.loads(message.data)
+            self._spray_output_enabled = bool(status['output_enabled'])
+            self._spray_session_enabled = bool(status['session_enabled'])
+        except (json.JSONDecodeError, KeyError, TypeError):
+            self._spray_output_enabled = None
+
+    def _legacy_mission_cb(self, message: String) -> None:
+        self._legacy_mission_state = str(message.data)
+
+    def _panel_mission_cb(self, message: String) -> None:
+        self._panel_mission_state = str(message.data)
+
+    def _capture_ground(self) -> None:
+        if (
+            not self._armed
+            and self._landed_state == self.ON_GROUND
+            and self._pose_xyz is not None
+        ):
+            self._ground_xyz = self._pose_xyz
+
+    # -- mission lifecycle ---------------------------------------------------
+
+    def _start_callback(self, _request, response):
+        if not self._configuration_approved:
+            response.success = False
+            response.message = 'configuration_approved=false'
+            return response
+        if not self._calibration_approved:
+            response.success = False
+            response.message = 'calibration_approved=false'
+            return response
+        if self._fsm.active:
+            response.success = False
+            response.message = f'mission already active in {self._fsm.state.name}'
+            return response
+        self._fsm.start()
+        self._reset_mission_bookkeeping()
+        self._publish_result('ACTIVE')
+        self._publish_state()
+        response.success = True
+        response.message = 'autonomous cleaning mission requested'
+        return response
+
+    def _abort_callback(self, _request, response):
+        if not self._fsm.active:
+            response.success = False
+            response.message = 'no active mission'
+            return response
+        self._fail('operator abort requested', request_land=True)
+        response.success = True
+        response.message = 'abort latched; landing requested'
+        return response
+
+    def _reset_mission_bookkeeping(self) -> None:
+        now_s = time.monotonic()
+        self._state_started_s = now_s
+        self._stage_started_s = now_s
+        self._stage = 'PRECHECK'
+        self._control_kind = 'none'
+        self._launch_xyz = None
+        self._launch_yaw_rad = None
+        self._panel_map = None
+        self._command_xyz = None
+        self._setpoint_speed_mps = 0.0
+        self._survey_started_s = None
+        self._verify_started_s = None
+        self._pending_action = None
+        self._last_action_s.clear()
+        self._spray_session_enabled = False
+        self._abort_land_requested = False
+        self._arrival.reset()
+        self._perception_window.reset()
+        self._alignment_window.reset()
+        self._launch_yaw_stability.reset()
+        self._publish_survey(False)
+        self._publish_ai_mode('idle')
+        self._panel_id_publisher.publish(Int32(data=-1))
+
+    def _tick(self) -> None:
+        now_s = time.monotonic()
+        state = self._fsm.state
+        if state in {
+            CleaningMissionState.IDLE,
+            CleaningMissionState.COMPLETE,
+        }:
+            return
+        if self._launch_yaw_rad is not None:
+            self._yaw_target_publisher.publish(
+                Float32(data=self._launch_yaw_rad)
+            )
+        if state == CleaningMissionState.ABORT:
+            self._tick_abort()
+            return
+        if self._altitude_guard_triggered:
+            self._fail('independent altitude guard triggered', True)
+            return
+        if state not in {
+            CleaningMissionState.PRECHECK,
+            CleaningMissionState.ARMING,
+            CleaningMissionState.LAND,
+        }:
+            if not self._telemetry_fresh(now_s):
+                self._fail('local pose or velocity telemetry timeout', True)
+                return
+            if not self._range_healthy(now_s):
+                self._fail('distance sensor timeout or invalid range', True)
+                return
+        if now_s - self._state_started_s > self._state_timeout_for(state):
+            self._fail(f'{state.name} timeout', True)
+            return
+        handlers = {
+            CleaningMissionState.PRECHECK: self._tick_precheck,
+            CleaningMissionState.ARMING: self._tick_arming,
+            CleaningMissionState.TAKEOFF: self._tick_takeoff,
+            CleaningMissionState.SURVEY: self._tick_survey,
+            CleaningMissionState.PLAN_ROUTE: self._tick_plan_route,
+            CleaningMissionState.DESCEND: self._tick_descend,
+            CleaningMissionState.TRANSIT: self._tick_position_state,
+            CleaningMissionState.SLOW_APPROACH: self._tick_position_state,
+            CleaningMissionState.REACQUIRE: self._tick_reacquire,
+            CleaningMissionState.ASSESS: self._tick_assess,
+            CleaningMissionState.PRECISION_ALIGN: self._tick_align,
+            CleaningMissionState.SPRAY: self._tick_spray,
+            CleaningMissionState.VERIFY: self._tick_verify,
+            CleaningMissionState.RETURN_HOME: self._tick_return_home,
+            CleaningMissionState.LAND: self._tick_land,
+        }
+        handler = handlers.get(state)
+        if handler is not None:
+            handler(now_s)
+
+    def _state_timeout_for(self, state: CleaningMissionState) -> float:
+        if state == CleaningMissionState.TAKEOFF:
+            return self._takeoff_timeout_s
+        if state == CleaningMissionState.SURVEY:
+            return self._survey_timeout_s
+        if state == CleaningMissionState.REACQUIRE:
+            return self._reacquire_timeout_s
+        if state == CleaningMissionState.VERIFY:
+            return self._verification_timeout_s
+        return self._state_timeout_s
+
+    def _tick_precheck(self, now_s: float) -> None:
+        failures = status_failures(
+            now_s=now_s,
+            timeout_s=self._status_timeout_s,
+            battery_remaining=self._battery_remaining,
+            battery_time_s=self._battery_time_s,
+            minimum_battery_remaining=self._minimum_battery,
+            landed_state=self._landed_state,
+            extended_state_time_s=self._extended_time_s,
+            require_on_ground=True,
+            sensors_enabled=self._sensors_enabled,
+            sensors_health=self._sensors_health,
+            sys_status_time_s=self._sys_time_s,
+            require_enabled_sensors_healthy=self._require_health,
+            ignored_unhealthy_sensor_mask=self._ignored_health,
+        )
+        if not self._connected:
+            failures.append('MAVROS disconnected')
+        if self._armed:
+            failures.append('vehicle already armed')
+        if not self._telemetry_fresh(now_s):
+            failures.append('local pose/velocity telemetry stale')
+        if not self._range_healthy(now_s):
+            failures.append('distance sensor unavailable')
+        if not self._ai_healthy:
+            failures.append('laptop AI heartbeat is not healthy')
+        if self._ground_xyz is None:
+            failures.append('launch Local XYZ reference unavailable')
+        if self._vertical_mode != 'DISABLED':
+            failures.append(f'vertical controller busy ({self._vertical_mode})')
+        inactive = {'', 'IDLE', 'COMPLETE', 'ABORT'}
+        if self._legacy_mission_state not in inactive:
+            failures.append(f'legacy mission active ({self._legacy_mission_state})')
+        if self._panel_mission_state not in inactive:
+            failures.append(f'fixed panel mission active ({self._panel_mission_state})')
+        velocity_publishers = self.count_publishers(
+            '/mavros/setpoint_velocity/cmd_vel'
+        )
+        position_publishers = self.count_publishers(
+            '/mavros/setpoint_position/local'
+        )
+        if velocity_publishers != 1:
+            failures.append(
+                'expected this mission to be the only MAVROS velocity '
+                f'publisher ({velocity_publishers} found)'
+            )
+        if position_publishers != 1:
+            failures.append(
+                'expected this mission to be the only MAVROS position '
+                f'publisher ({position_publishers} found)'
+            )
+        if self._require_live_spray and not self._spray_output_enabled:
+            failures.append('live spray output is unavailable or blocked')
+        if failures:
+            self._fail('preflight failed: ' + '; '.join(failures), False)
+            return
+        if self._mode != self._loiter_mode:
+            self._request_mode(self._loiter_mode)
+            return
+        stable_yaw = self._launch_yaw_stability.stable_yaw_rad
+        if stable_yaw is None:
+            return
+        self._launch_xyz = self._ground_xyz
+        self._launch_yaw_rad = stable_yaw
+        previous = self._fsm.state
+        self._fsm.precheck_complete()
+        self._on_transition(previous)
+
+    def _tick_arming(self, _now_s: float) -> None:
+        if self._armed:
+            previous = self._fsm.state
+            self._fsm.armed()
+            self._on_transition(previous)
+            return
+        request = CommandBool.Request()
+        request.value = True
+        self._request('arm', self._arm_client, request, lambda result: result.success)
+
+    def _tick_takeoff(self, now_s: float) -> None:
+        if self._stage == 'ENABLE':
+            self._request_bool(
+                'takeoff_enable', self._takeoff_client, True
+            )
+            if self._takeoff_enabled:
+                self._set_stage('PRESTREAM')
+            return
+        self._publish_combined_velocity(now_s, include_visual=False)
+        if self._stage == 'PRESTREAM':
+            if now_s - self._stage_started_s >= self._prestream_s:
+                self._set_stage('ENTER_OFFBOARD')
+            return
+        if self._stage == 'ENTER_OFFBOARD':
+            if self._mode == 'OFFBOARD':
+                self._control_kind = 'velocity'
+                self._set_stage('HOLD')
+            else:
+                self._request_mode('OFFBOARD')
+            return
+        if self._mode != 'OFFBOARD':
+            self._fail(f'PX4/QGC mode override during takeoff: {self._mode}', False)
+            return
+        if self._takeoff_reached:
+            self._request_bool(
+                'takeoff_disable', self._takeoff_client, False
+            )
+            self._request_mode(self._loiter_mode)
+            if not self._takeoff_enabled and self._mode == self._loiter_mode:
+                self._control_kind = 'none'
+                previous = self._fsm.state
+                self._fsm.takeoff_complete()
+                self._on_transition(previous)
+
+    def _tick_survey(self, now_s: float) -> None:
+        if not self._ai_healthy:
+            self._fail('laptop AI heartbeat lost during survey', True)
+            return
+        if self._survey_started_s is None:
+            self._survey_started_s = now_s
+            self._panel_map = None
+            self._publish_ai_mode('survey')
+            self._publish_survey(True)
+            return
+        if now_s - self._survey_started_s < self._survey_duration_s:
+            return
+        self._publish_survey(False)
+        if self._panel_map is None or not self._panel_map.finalized:
+            return
+        targets = self._panel_targets_from_message(self._panel_map)
+        if not targets:
+            self._fail('3 m survey produced no stable panel targets', True)
+            return
+        if len(targets) > self._maximum_survey_panels:
+            self._fail('survey panel count exceeds configured limit', True)
+            return
+        previous = self._fsm.state
+        self._fsm.survey_complete(targets)
+        self._on_transition(previous)
+
+    def _tick_plan_route(self, _now_s: float) -> None:
+        if self._launch_xyz is None or self._pose_xyz is None:
+            self._fail('route planning lacks launch/current pose', True)
+            return
+        try:
+            plan = plan_panel_route(
+                (self._pose_xyz[0], self._pose_xyz[1]),
+                [progress.target for progress in self._fsm.panels],
+                (self._launch_xyz[0], self._launch_xyz[1]),
+            )
+            previous = self._fsm.state
+            self._fsm.route_planned(plan.panel_ids)
+            self._on_transition(previous)
+            self.get_logger().info(
+                f'Dynamic route {plan.panel_ids}, '
+                f'travel={plan.total_distance_m:.2f} m'
+            )
+        except ValueError as exc:
+            self._fail(f'route planning failed: {exc}', True)
+
+    def _tick_descend(self, now_s: float) -> None:
+        if self._tick_velocity_control_entry(now_s, require_visual=False):
+            return
+        if self._mode != 'OFFBOARD':
+            self._fail(f'PX4/QGC mode override during descent: {self._mode}', False)
+            return
+        self._publish_combined_velocity(now_s, include_visual=False)
+        if self._distance_reached:
+            self._handover_velocity_to_loiter()
+            if not self._distance_enabled and self._mode == self._loiter_mode:
+                self._control_kind = 'none'
+                previous = self._fsm.state
+                self._fsm.descent_complete()
+                self._on_transition(previous)
+
+    def _tick_position_state(self, now_s: float) -> None:
+        if self._tick_position_control_entry(now_s):
+            return
+        if self._mode != 'OFFBOARD':
+            self._fail(f'PX4/QGC mode override during transit: {self._mode}', False)
+            return
+        panel = self._fsm.current_panel
+        if panel is None:
+            self._fail('panel transit has no current panel', True)
+            return
+        if self._panel_visible and self._fsm.state == CleaningMissionState.TRANSIT:
+            previous = self._fsm.state
+            self._fsm.panel_visible()
+            self._on_transition(previous, preserve_control=True)
+        target_xyz = self._panel_target_xyz(panel.target.east_m, panel.target.north_m)
+        self._advance_and_publish_position(target_xyz, now_s)
+        arrived = self._arrival.update(
+            math.hypot(
+                self._pose_xyz[0] - panel.target.east_m,
+                self._pose_xyz[1] - panel.target.north_m,
+            ),
+            self._horizontal_speed(),
+            now_s,
+        )
+        if arrived:
+            previous = self._fsm.state
+            self._fsm.transit_arrived()
+            self._on_transition(previous, preserve_control=True)
+
+    def _tick_reacquire(self, now_s: float) -> None:
+        if self._tick_position_control_entry(now_s):
+            return
+        if self._mode != 'OFFBOARD':
+            self._fail(f'PX4/QGC mode override in reacquisition: {self._mode}', False)
+            return
+        panel = self._fsm.current_panel
+        if panel is None:
+            self._fail('reacquisition has no panel', True)
+            return
+        elapsed_s = now_s - self._state_started_s
+        angle = 2.0 * math.pi * elapsed_s / self._reacquire_period_s
+        radius = self._reacquire_radius_m * min(1.0, elapsed_s / 2.0)
+        target_xyz = self._panel_target_xyz(
+            panel.target.east_m + radius * math.cos(angle),
+            panel.target.north_m + radius * math.sin(angle),
+        )
+        self._advance_and_publish_position(target_xyz, now_s)
+        valid = self._fresh_clean_perception(now_s) and self._panel_visible
+        if self._perception_window.update(valid, now_s):
+            previous = self._fsm.state
+            self._fsm.panel_reacquired()
+            self._on_transition(previous, preserve_control=True)
+
+    def _tick_assess(self, now_s: float) -> None:
+        if self._mode != 'OFFBOARD' or self._control_kind != 'position':
+            self._fail('position control lost during cleanliness assessment', False)
+            return
+        panel = self._fsm.current_panel
+        if panel is None:
+            self._fail('assessment has no panel', True)
+            return
+        self._publish_position_hold(self._panel_target_xyz(
+            panel.target.east_m, panel.target.north_m
+        ))
+        if self._clean_packet_fresh(now_s) and not self._panel_visible:
+            previous = self._fsm.state
+            self._fsm.target_lost()
+            self._on_transition(previous)
+            return
+        valid = self._fresh_clean_perception(now_s) and self._panel_visible
+        if not valid:
+            self._perception_window.reset()
+            return
+        if (
+            not self._distance_and_yaw_ready()
+            or self._horizontal_speed() > self._arrival_max_speed_mps
+        ):
+            return
+        if not self._perception_window.update(True, now_s):
+            return
+        dirt_found = bool(self._perception.dirt_found)
+        previous = self._fsm.state
+        self._fsm.cleanliness_result(dirt_found)
+        self._on_transition(previous)
+
+    def _tick_align(self, now_s: float) -> None:
+        if self._tick_velocity_control_entry(now_s, require_visual=True):
+            return
+        if self._mode != 'OFFBOARD':
+            self._fail(f'PX4/QGC mode override during alignment: {self._mode}', False)
+            return
+        if not self._fresh_clean_perception(now_s) or not self._panel_visible:
+            previous = self._fsm.state
+            self._fsm.target_lost()
+            self._on_transition(previous)
+            return
+        self._publish_combined_velocity(now_s, include_visual=True)
+        aligned = (
+            self._visual_valid
+            and self._visual_aligned
+            and self._distance_reached
+            and self._distance_and_yaw_ready()
+            and self._horizontal_speed() <= self._arrival_max_speed_mps
+        )
+        if self._alignment_window.update(aligned, now_s):
+            previous = self._fsm.state
+            self._fsm.alignment_complete()
+            self._on_transition(previous, preserve_control=True)
+
+    def _tick_spray(self, now_s: float) -> None:
+        self._publish_combined_velocity(now_s, include_visual=False)
+        if not self._spray_session_enabled:
+            self._request_bool(
+                'spray_enable', self._spray_enable_client, True
+            )
+            return
+        request = Trigger.Request()
+
+        def sprayed(_result) -> None:
+            previous = self._fsm.state
+            self._fsm.spray_complete()
+            self._on_transition(previous, preserve_control=True)
+
+        self._request(
+            'spray_trigger',
+            self._spray_trigger_client,
+            request,
+            lambda result: result.success,
+            sprayed,
+        )
+
+    def _tick_verify(self, now_s: float) -> None:
+        self._publish_combined_velocity(now_s, include_visual=False)
+        if self._verify_started_s is None:
+            self._verify_started_s = now_s
+            self._perception_window.reset()
+            return
+        if now_s - self._verify_started_s < self._verification_settle_s:
+            return
+        if self._clean_packet_fresh(now_s) and not self._panel_visible:
+            previous = self._fsm.state
+            self._fsm.target_lost()
+            self._on_transition(previous)
+            return
+        if not self._fresh_clean_perception(now_s) or not self._panel_visible:
+            self._perception_window.reset()
+            return
+        if not self._distance_and_yaw_ready():
+            self._perception_window.reset()
+            return
+        if not self._perception_window.update(True, now_s):
+            return
+        dirt_found = bool(self._perception.dirt_found)
+        previous = self._fsm.state
+        self._fsm.cleanliness_result(dirt_found)
+        self._on_transition(previous)
+
+    def _tick_return_home(self, now_s: float) -> None:
+        if self._tick_position_control_entry(now_s):
+            return
+        if self._launch_xyz is None:
+            self._fail('home reference unavailable', True)
+            return
+        target_xyz = self._panel_target_xyz(
+            self._launch_xyz[0], self._launch_xyz[1]
+        )
+        self._advance_and_publish_position(target_xyz, now_s)
+        arrived = self._arrival.update(
+            math.hypot(
+                self._pose_xyz[0] - self._launch_xyz[0],
+                self._pose_xyz[1] - self._launch_xyz[1],
+            ),
+            self._horizontal_speed(),
+            now_s,
+        )
+        if arrived:
+            self._request_mode(self._loiter_mode)
+            if self._mode == self._loiter_mode:
+                previous = self._fsm.state
+                self._fsm.home_arrived()
+                self._on_transition(previous)
+
+    def _tick_land(self, _now_s: float) -> None:
+        self._publish_survey(False)
+        self._publish_ai_mode('idle')
+        self._request_bool('spray_disable', self._spray_enable_client, False)
+        if self._mode != self._land_mode and self._armed:
+            self._request_mode(self._land_mode)
+            return
+        if not self._armed and self._landed_state == self.ON_GROUND:
+            previous = self._fsm.state
+            self._fsm.landed()
+            self._on_transition(previous)
+            self._publish_result('COMPLETE')
+
+    def _tick_abort(self) -> None:
+        self._publish_survey(False)
+        self._publish_ai_mode('idle')
+        self._request_bool('takeoff_disable', self._takeoff_client, False)
+        self._request_bool('distance_disable', self._distance_client, False)
+        self._request_bool('spray_disable', self._spray_enable_client, False)
+        if self._armed and self._abort_land_requested and self._mode != self._land_mode:
+            self._request_mode(self._land_mode)
+
+    # -- control mode handovers ---------------------------------------------
+
+    def _tick_velocity_control_entry(
+        self,
+        now_s: float,
+        *,
+        require_visual: bool,
+    ) -> bool:
+        if self._control_kind == 'velocity' and self._stage == 'ACTIVE':
+            self._publish_combined_velocity(now_s, include_visual=require_visual)
+            return False
+        if self._stage == 'HANDOVER':
+            if self._mode != self._loiter_mode:
+                self._request_mode(self._loiter_mode)
+                return True
+            self._request_bool('distance_enable', self._distance_client, True)
+            if self._distance_enabled:
+                self._set_stage('PRESTREAM')
+            return True
+        self._publish_combined_velocity(now_s, include_visual=require_visual)
+        if self._stage == 'PRESTREAM':
+            if now_s - self._stage_started_s >= self._prestream_s:
+                self._set_stage('ENTER_OFFBOARD')
+            return True
+        if self._stage == 'ENTER_OFFBOARD':
+            if self._mode == 'OFFBOARD':
+                self._control_kind = 'velocity'
+                self._set_stage('ACTIVE')
+                return False
+            self._request_mode('OFFBOARD')
+            return True
+        return False
+
+    def _tick_position_control_entry(self, now_s: float) -> bool:
+        if self._control_kind == 'position' and self._stage == 'ACTIVE':
+            return False
+        if self._stage == 'HANDOVER':
+            self._request_bool('distance_disable', self._distance_client, False)
+            self._request_bool('takeoff_disable', self._takeoff_client, False)
+            self._request_bool('spray_disable', self._spray_enable_client, False)
+            if self._mode != self._loiter_mode:
+                self._request_mode(self._loiter_mode)
+                return True
+            if self._distance_enabled or self._takeoff_enabled:
+                return True
+            if self._pose_xyz is None:
+                return True
+            self._command_xyz = self._pose_xyz
+            self._setpoint_speed_mps = 0.0
+            self._last_setpoint_s = now_s
+            self._set_stage('PRESTREAM')
+        if self._stage == 'PRESTREAM':
+            self._publish_position_hold(self._command_xyz)
+            if now_s - self._stage_started_s >= self._prestream_s:
+                self._set_stage('ENTER_OFFBOARD')
+            return True
+        if self._stage == 'ENTER_OFFBOARD':
+            self._publish_position_hold(self._command_xyz)
+            if self._mode == 'OFFBOARD':
+                self._control_kind = 'position'
+                self._set_stage('ACTIVE')
+                return False
+            self._request_mode('OFFBOARD')
+            return True
+        return False
+
+    def _handover_velocity_to_loiter(self) -> None:
+        self._request_bool('distance_disable', self._distance_client, False)
+        self._request_bool('takeoff_disable', self._takeoff_client, False)
+        self._request_mode(self._loiter_mode)
+
+    def _publish_combined_velocity(
+        self,
+        now_s: float,
+        *,
+        include_visual: bool,
+    ) -> None:
+        command = TwistStamped()
+        command.header.stamp = self.get_clock().now().to_msg()
+        command.header.frame_id = 'map'
+        distance_fresh = (
+            self._distance_command is not None
+            and self._distance_command_time_s is not None
+            and now_s - self._distance_command_time_s <= self._sensor_timeout_s
+        )
+        if distance_fresh:
+            command.twist.linear.z = self._distance_command.twist.linear.z
+            command.twist.angular.z = self._distance_command.twist.angular.z
+        visual_fresh = (
+            self._visual_command is not None
+            and self._visual_command_time_s is not None
+            and now_s - self._visual_command_time_s <= self._perception_timeout_s
+        )
+        if include_visual and visual_fresh and self._visual_valid:
+            command.twist.linear.x = self._visual_command.twist.linear.x
+            command.twist.linear.y = self._visual_command.twist.linear.y
+        self._velocity_publisher.publish(command)
+
+    def _panel_target_xyz(self, east_m: float, north_m: float):
+        if self._pose_xyz is None or self._distance_m is None:
+            raise RuntimeError('pose/range unavailable for target')
+        local_z = lidar_referenced_local_z_target(
+            local_z_m=self._pose_xyz[2],
+            measured_distance_m=self._distance_m,
+            target_distance_m=self._spray_distance_m,
+            gain=self._lidar_z_gain,
+            maximum_offset_m=self._lidar_z_max_offset_m,
+            tolerance_m=self._lidar_z_tolerance_m,
+        )
+        return east_m, north_m, local_z
+
+    def _advance_and_publish_position(
+        self,
+        target_xyz: tuple[float, float, float],
+        now_s: float,
+    ) -> None:
+        if self._command_xyz is None:
+            self._command_xyz = self._pose_xyz
+        dt_s = max(0.001, min(0.2, now_s - self._last_setpoint_s))
+        self._last_setpoint_s = now_s
+        speed_limit = (
+            self._visible_speed_mps
+            if self._panel_visible
+            else self._cruise_speed_mps
+        )
+        self._command_xyz, self._setpoint_speed_mps = (
+            advance_slowed_position_setpoint(
+                self._command_xyz,
+                target_xyz,
+                (self._pose_xyz[0], self._pose_xyz[1]),
+                current_horizontal_speed_mps=self._setpoint_speed_mps,
+                maximum_horizontal_speed_mps=speed_limit,
+                maximum_horizontal_accel_mps2=self._horizontal_accel_mps2,
+                horizontal_slow_zone_m=self._horizontal_slow_zone_m,
+                minimum_approach_speed_mps=min(
+                    self._minimum_approach_speed_mps,
+                    speed_limit,
+                ),
+                target_snap_distance_m=self._target_snap_distance_m,
+                maximum_vertical_speed_mps=self._maximum_vertical_speed_mps,
+                dt_s=dt_s,
+            )
+        )
+        self._publish_position_hold(self._command_xyz)
+
+    def _publish_position_hold(self, xyz) -> None:
+        if xyz is None or self._launch_yaw_rad is None:
+            return
+        message = PoseStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = 'map'
+        message.pose.position.x = xyz[0]
+        message.pose.position.y = xyz[1]
+        message.pose.position.z = xyz[2]
+        half_yaw = self._launch_yaw_rad / 2.0
+        message.pose.orientation.z = math.sin(half_yaw)
+        message.pose.orientation.w = math.cos(half_yaw)
+        self._position_publisher.publish(message)
+
+    # -- decisions and state bookkeeping ------------------------------------
+
+    def _fresh_clean_perception(self, now_s: float) -> bool:
+        panel = self._fsm.current_panel
+        return bool(
+            self._clean_packet_fresh(now_s)
+            and self._perception.valid
+            and (
+                int(self._perception.active_panel_id) < 0
+                or panel is None
+                or int(self._perception.active_panel_id)
+                == panel.target.panel_id
+            )
+        )
+
+    def _clean_packet_fresh(self, now_s: float) -> bool:
+        return bool(
+            self._ai_healthy
+            and self._perception is not None
+            and self._perception_time_s is not None
+            and now_s - self._perception_time_s <= self._perception_timeout_s
+            and str(self._perception.mode).lower() == 'clean'
+        )
+
+    def _distance_and_yaw_ready(self) -> bool:
+        if self._distance_m is None or self._yaw_rad is None:
+            return False
+        if self._launch_yaw_rad is None:
+            return False
+        return (
+            abs(self._distance_m - self._spray_distance_m)
+            <= self._lidar_z_tolerance_m
+            and abs(wrapped_yaw_error(self._launch_yaw_rad, self._yaw_rad))
+            <= self._yaw_tolerance_rad
+        )
+
+    def _panel_targets_from_message(self, message: PanelMap):
+        return tuple(
+            PanelTarget(
+                panel_id=int(panel.panel_id),
+                east_m=float(panel.east_m),
+                north_m=float(panel.north_m),
+                width_m=float(panel.width_m),
+                height_m=float(panel.height_m),
+                confidence=float(panel.confidence),
+                observation_count=int(panel.observation_count),
+            )
+            for panel in message.panels
+        )
+
+    def _on_transition(
+        self,
+        previous: CleaningMissionState,
+        preserve_control: bool = False,
+    ) -> None:
+        state = self._fsm.state
+        if state == previous:
+            return
+        now_s = time.monotonic()
+        self._state_started_s = now_s
+        self._stage_started_s = now_s
+        self._perception_window.reset()
+        self._alignment_window.reset()
+        self._arrival.reset()
+        self._verify_started_s = None
+        if state == CleaningMissionState.TAKEOFF:
+            self._stage = 'ENABLE'
+            self._control_kind = 'none'
+        elif state in {
+            CleaningMissionState.DESCEND,
+            CleaningMissionState.PRECISION_ALIGN,
+        }:
+            self._stage = 'HANDOVER'
+            if not preserve_control:
+                self._control_kind = 'none'
+        elif state in self.POSITION_STATES:
+            if preserve_control and self._control_kind == 'position':
+                self._stage = 'ACTIVE'
+            else:
+                self._stage = 'HANDOVER'
+                self._control_kind = 'none'
+            self._command_xyz = self._pose_xyz
+            self._setpoint_speed_mps = 0.0
+        else:
+            self._stage = 'ACTIVE'
+        if state in {
+            CleaningMissionState.TRANSIT,
+            CleaningMissionState.SLOW_APPROACH,
+            CleaningMissionState.REACQUIRE,
+            CleaningMissionState.ASSESS,
+            CleaningMissionState.PRECISION_ALIGN,
+            CleaningMissionState.SPRAY,
+            CleaningMissionState.VERIFY,
+        }:
+            panel = self._fsm.current_panel
+            panel_id = panel.target.panel_id if panel else -1
+            self._panel_id_publisher.publish(Int32(data=panel_id))
+            self._publish_ai_mode('clean')
+        if state in {
+            CleaningMissionState.RETURN_HOME,
+            CleaningMissionState.LAND,
+            CleaningMissionState.COMPLETE,
+            CleaningMissionState.ABORT,
+        }:
+            self._panel_id_publisher.publish(Int32(data=-1))
+        self.get_logger().info(
+            f'{previous.name} -> {state.name}: {self._fsm.reason}'
+        )
+        self._publish_state()
+
+    def _set_stage(self, stage: str) -> None:
+        if stage == self._stage:
+            return
+        self._stage = stage
+        self._stage_started_s = time.monotonic()
+
+    def _telemetry_fresh(self, now_s: float) -> bool:
+        return (
+            self._pose_xyz is not None
+            and self._pose_time_s is not None
+            and now_s - self._pose_time_s <= self._telemetry_timeout_s
+            and self._velocity_xyz is not None
+            and self._velocity_time_s is not None
+            and now_s - self._velocity_time_s <= self._telemetry_timeout_s
+        )
+
+    def _range_healthy(self, now_s: float) -> bool:
+        if self._distance_m is None or self._range_time_s is None:
+            return False
+        if now_s - self._range_time_s > self._sensor_timeout_s:
+            return False
+        if not math.isfinite(self._distance_m) or self._distance_m <= 0.0:
+            return False
+        if self._range_min_m > 0.0 and self._distance_m < self._range_min_m:
+            return False
+        if self._range_max_m > 0.0 and self._distance_m > self._range_max_m:
+            return False
+        return True
+
+    def _horizontal_speed(self) -> float:
+        if self._velocity_xyz is None:
+            return math.inf
+        return math.hypot(self._velocity_xyz[0], self._velocity_xyz[1])
+
+    # -- service requests and fail-safe --------------------------------------
+
+    def _request_mode(self, mode: str) -> None:
+        request = SetMode.Request()
+        request.base_mode = 0
+        request.custom_mode = mode
+        self._request(
+            f'mode:{mode}',
+            self._mode_client,
+            request,
+            lambda result: result.mode_sent,
+        )
+
+    def _request_bool(self, action: str, client, enabled: bool) -> None:
+        request = SetBool.Request()
+        request.data = enabled
+        self._request(action, client, request, lambda result: result.success)
+
+    def _request(
+        self,
+        action: str,
+        client,
+        request,
+        accepted: Callable,
+        on_success: Optional[Callable] = None,
+    ) -> None:
+        now_s = time.monotonic()
+        if self._pending_action is not None:
+            return
+        if now_s - self._last_action_s.get(action, -math.inf) < self._action_retry_s:
+            return
+        if not client.service_is_ready():
+            self._last_action_s[action] = now_s
+            return
+        self._pending_action = action
+        self._last_action_s[action] = now_s
+        future = client.call_async(request)
+
+        def completed(result_future) -> None:
+            self._pending_action = None
+            try:
+                result = result_future.result()
+                success = bool(accepted(result))
+            except Exception as exc:  # ROS service transport error
+                self.get_logger().error(f'{action} service failed: {exc}')
+                return
+            if not success:
+                message = getattr(result, 'message', 'request rejected')
+                self.get_logger().warning(f'{action} rejected: {message}')
+                return
+            if on_success is not None:
+                on_success(result)
+
+        future.add_done_callback(completed)
+
+    def _fail(self, reason: str, request_land: bool) -> None:
+        if self._fsm.state == CleaningMissionState.ABORT:
+            return
+        self.get_logger().error(reason)
+        self._fsm.abort(reason)
+        self._abort_land_requested = bool(request_land)
+        self._publish_result('ABORT: ' + reason)
+        self._publish_state()
+        self._publish_survey(False)
+        self._publish_ai_mode('idle')
+
+    def _publish_state(self) -> None:
+        self._state_publisher.publish(String(data=self._fsm.state.name))
+
+    def _publish_result(self, result: str) -> None:
+        self._result_publisher.publish(String(data=result))
+
+    def _publish_survey(self, active: bool) -> None:
+        self._survey_publisher.publish(Bool(data=active))
+
+    def _publish_ai_mode(self, mode: str) -> None:
+        self._ai_mode_publisher.publish(String(data=mode))
+
+
+def main(args=None) -> None:
+    """Run the full autonomous cleaning mission manager."""
+    rclpy.init(args=args)
+    node = AutonomousCleaningMissionNode()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

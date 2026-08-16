@@ -1,0 +1,14 @@
+[Unit]
+Description=DA-DAKA host Pi Camera burst capture proxy
+After=local-fs.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/da-daka_Ai
+ExecStart=/usr/bin/python3 %h/da-daka_Ai/tools/camera_capture_proxy.py
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

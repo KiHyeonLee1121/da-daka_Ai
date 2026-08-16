@@ -175,6 +175,7 @@ class VirtualDistanceSensor(Node):
 
 
 def main(args=None) -> None:
+    """Run the virtual range sensor node."""
     rclpy.init(args=args)
     node = VirtualDistanceSensor()
     try:

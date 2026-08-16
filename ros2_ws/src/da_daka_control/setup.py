@@ -42,6 +42,17 @@ setup(
             'altitude_guard = da_daka_control.altitude_guard:main',
             'panel_mission = da_daka_control.panel_mission_node:main',
             'panel_distance_mission = da_daka_control.panel_distance_mission_node:main',
+            'panel_survey = da_daka_control.panel_survey_node:main',
+            'nozzle_visual_servo = '
+            'da_daka_control.nozzle_visual_servo_node:main',
+            'perception_receiver = '
+            'da_daka_control.perception_receiver_node:main',
+            'spray_controller = da_daka_control.spray_controller_node:main',
+            'autonomous_cleaning_mission = '
+            'da_daka_control.autonomous_cleaning_mission_node:main',
+            'video_streamer = da_daka_control.video_streamer_node:main',
+            'perception_control_sender = '
+            'da_daka_control.perception_control_sender_node:main',
         ],
     },
 )

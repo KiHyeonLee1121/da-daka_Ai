@@ -13,6 +13,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>mavros_msgs</depend>
+  <depend>da_daka_interfaces</depend>
   <exec_depend>python3-serial</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
