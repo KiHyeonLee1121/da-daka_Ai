@@ -91,7 +91,6 @@ flowchart TB
 | `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
 | `docs/field_diagnostics.md` | 좌표 투영과 카메라 진단 절차 |
 | `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
-| `docs/pi_safe_main_sync_prompt.md` | Pi 로컬 작업 보존형 `main` 동기화 프롬프트 |
 | `tools` | 비행 명령을 내리지 않는 카메라/투영 진단 도구 |
 
 루트의 `main.py`와 `control/`, `vision/` 등은 과거 bench/호환 시험용 코드다.
@@ -107,11 +106,7 @@ Pi 저장소에 커밋하지 않은 파일이나 별도 변경이 있으면 그 
 전체와 `.git`, 추적·비추적 파일을 복사하고, 로컬 보존 브랜치를 만든 뒤,
 `origin/main`에서 시작한 별도 worktree에 Pi 변경을 파일별로 선별 적용한다.
 
-Pi에서 작업하는 Codex에 아래 문서의 코드 블록 전체를 그대로 전달한다.
-
-> **[Raspberry Pi 안전 동기화용 Codex 프롬프트](docs/pi_safe_main_sync_prompt.md)**
-
-이 프롬프트는 다음을 강제한다.
+안전 동기화는 다음 원칙을 지킨다.
 
 - 저장공간과 저장소 확인 후 전체 폴더 백업
 - Pi 로컬 변경의 목록화와 로컬 백업 커밋
@@ -444,7 +439,6 @@ PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
 
 - [최종 자율 청소 구조](docs/autonomous_cleaning_architecture.md)
 - [현장 좌표·카메라 진단](docs/field_diagnostics.md)
-- [안전한 Pi main 동기화 프롬프트](docs/pi_safe_main_sync_prompt.md)
 - [브랜치 통합 감사 기록](docs/branch_consolidation.md)
 - [노트북 AI worker](laptop_ai/README.md)
 - [모바일 카메라 진단 릴레이](docs/mobile_camera_relay.md)
