@@ -8,6 +8,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description() -> LaunchDescription:
+    """Launch the TF-Luna serial range sensor node."""
     package_share = get_package_share_directory('da_daka_control')
     parameter_file = os.path.join(
         package_share,

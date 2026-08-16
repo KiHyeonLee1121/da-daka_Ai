@@ -1,0 +1,55 @@
+autonomous_cleaning_mission:
+  ros__parameters:
+    # Both approvals remain false until route clearance and camera/nozzle
+    # calibration have been checked on the physical vehicle.
+    configuration_approved: false
+    calibration_approved: false
+    require_live_spray: true
+
+    survey_duration_s: 3.0
+    spray_distance_m: 1.0
+    maximum_survey_panels: 32
+    max_spray_attempts: 3
+
+    arrival_tolerance_m: 0.25
+    arrival_max_speed_mps: 0.10
+    arrival_stable_s: 1.0
+    cruise_speed_mps: 0.65
+    panel_visible_speed_mps: 0.18
+    horizontal_accel_mps2: 0.50
+    horizontal_slow_zone_m: 1.0
+    minimum_approach_speed_mps: 0.10
+    target_snap_distance_m: 0.05
+    maximum_vertical_setpoint_speed_mps: 0.20
+
+    lidar_z_gain: 1.0
+    lidar_z_tolerance_m: 0.10
+    lidar_z_max_offset_m: 0.35
+    reacquire_radius_m: 0.25
+    reacquire_period_s: 5.0
+
+    prestream_s: 2.0
+    perception_stable_s: 0.5
+    alignment_stable_s: 0.7
+    verification_settle_s: 1.0
+    yaw_tolerance_deg: 5.0
+    launch_yaw_stable_s: 1.0
+    launch_yaw_max_deviation_deg: 2.0
+
+    sensor_timeout_s: 0.4
+    telemetry_timeout_s: 0.5
+    perception_timeout_s: 0.7
+    status_timeout_s: 3.0
+    state_timeout_s: 40.0
+    takeoff_timeout_s: 45.0
+    survey_timeout_s: 15.0
+    reacquire_timeout_s: 20.0
+    verification_timeout_s: 20.0
+
+    minimum_battery_remaining: 0.15
+    require_enabled_sensors_healthy: true
+    ignored_unhealthy_sensor_mask: 81920
+    loiter_mode: "AUTO.LOITER"
+    land_mode: "AUTO.LAND"
+    tick_rate_hz: 20.0
+    action_retry_s: 1.0

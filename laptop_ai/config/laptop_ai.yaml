@@ -1,0 +1,55 @@
+network:
+  source_id: "laptop-ai-01"
+  pi_source_id: "pi5-01"
+  pi_ip: "192.168.1.20"
+  result_port: 5005
+  control_bind: "0.0.0.0"
+  control_port: 5006
+  control_timeout_s: 1.0
+
+video:
+  port: 5600
+
+panel_detector:
+  minimum_area_ratio: 0.01
+  maximum_area_ratio: 0.90
+  minimum_aspect_ratio: 1.0
+  maximum_aspect_ratio: 4.0
+  maximum_panels: 32
+
+target_selection:
+  # The active random-layout panel should be closest to this image point after
+  # metric transit. A distant non-target panel cannot trigger cleaning.
+  target_x_norm: 0.50
+  target_y_norm: 0.50
+  maximum_center_distance_norm: 0.45
+
+dirt_model:
+  # The repository intentionally does not fabricate weights. Put the trained
+  # binary segmentation ONNX file here and validate its output contract.
+  path: "models/dirt_segmentation.onnx"
+  input_width: 512
+  input_height: 512
+  output_channel: 0
+  threshold: 0.50
+  minimum_area_ratio: 0.001
+
+performance:
+  opencv_num_threads: 2
+  opencv_use_opencl: false
+  opencv_use_optimized: true
+  onnx_intra_op_threads: 1
+  onnx_inter_op_threads: 1
+  onnx_graph_optimization: "all"
+  onnx_device_id: 0
+  onnx_warmup_runs: 5
+  onnx_cuda_conv_use_max_workspace: true
+  onnx_cuda_use_tf32: true
+  onnx_cuda_arena_extend_strategy: "kNextPowerOfTwo"
+  onnx_cuda_cudnn_conv_algo_search: "EXHAUSTIVE"
+  cuda_module_loading_lazy: true
+
+runtime:
+  idle_heartbeat_s: 0.25
+  # Observe-only until real bitrate/inference/accuracy profiles are measured.
+  optimizer_config: "laptop_ai/config/pendulum_optimization.yaml"

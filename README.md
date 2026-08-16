@@ -34,13 +34,29 @@ Pixhawk 4 / PX4
 제한한다. 거리 Mission Manager와 Panel Mission은 동시에 실행하지 않는다.
 거리 오차에 따른 속도 setpoint는 활성화된
 `distance_controller`만 발행한다. 기존 `main.py`의 `MavlinkBridge`와
-ROS 2 거리제어를 동시에 live 모드로 실행하면 안 된다. AI 코드는 검출
-결과를 제공하고, 분사 코드는 서비스 요청을 처리하는 방향으로 통합할
-예정이다.
+ROS 2 거리제어를 동시에 live 모드로 실행하면 안 된다. 최종 launch에서는
+노트북 AI가 검출 결과만 제공하고, Pi의 분사 노드는 서비스 요청만 처리하며,
+`autonomous_cleaning_mission` 하나가 MAVROS setpoint를 소유한다.
 
 현재 ROS 2 거리제어 패키지는 `ros2_ws/src/da_daka_control`에 있다.
 상세한 통합 상태, 인터페이스와 남은 작업은
 [`docs/system_architecture.md`](docs/system_architecture.md)를 참고한다.
+
+## 2026-08-16 무작위 패널 통합 자율 청소 미션
+
+고정 사각형 경로와 Pi 내부 임시 AI 대신, 3 m 측량 영상에서 복수 패널의
+Local ENU 좌표를 만들고 배치에 따라 방문 순서를 계산하는 통합 미션을
+추가했다. Pi5가 ARM/OFFBOARD/이동/분사/복귀 순서를 소유하고, 노트북은
+NVIDIA CUDA 추론 결과만 돌려준다.
+
+통합 launch, 정확한 상태 순서, Pi↔노트북 UDP 인터페이스, 실기체에서 반드시
+측정해야 할 값은
+[`docs/autonomous_cleaning_architecture.md`](docs/autonomous_cleaning_architecture.md)에
+정리되어 있다.
+
+각 원격 브랜치에서 흡수·대체한 기능과 고정 격자·mock 명령처럼 최종 제어
+구조에서 제외한 이유는
+[`docs/branch_consolidation.md`](docs/branch_consolidation.md)에 기록했다.
 
 ## 2026-08-05 Local Z 이륙 및 거리제어 시험 구조
 
