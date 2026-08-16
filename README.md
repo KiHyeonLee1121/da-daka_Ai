@@ -90,6 +90,7 @@ flowchart TB
 | `laptop_ai` | CUDA 전용 ONNX 추론 worker와 성능 측정 도구 |
 | `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
 | `docs/edge_gpu_offload_runbook.md` | Pi–노트북 GPU offload 연결, 안전 점검과 2026-08-16 현장 검증 결과 |
+| `docs/codex_agent_bridge.md` | 두 장비의 터미널 Codex가 SSH 메시지함으로 작업을 인계하는 방법 |
 | `docs/field_diagnostics.md` | 좌표 투영과 카메라 진단 절차 |
 | `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
 | `tools` | 비행 명령을 내리지 않는 카메라/투영 진단 도구 |
@@ -99,6 +100,11 @@ Pi의 ROS 2가 Docker 안에서 실행되고 카메라 도구가 호스트에만
 있다. GPU 노트북에서 Pi 송출을 원격으로 시작하려면
 `tools/gpu_laptop_start_pi_camera.sh`를 사용한다. 자세한 설정과 판정 기준은 GPU
 offload runbook을 따른다.
+
+두 장비의 Codex 작업 인계는 `DA-DAKA Agent Console`에서 Pi 주소를 입력해
+연결할 수 있다. `request` 메시지는 제한된 `codex exec` worker로 자동 처리하고
+`result/note`는 자동 실행하지 않는다. 설치와 안전 제한은 Codex agent bridge
+문서를 따른다.
 
 루트의 `main.py`와 `control/`, `vision/` 등은 과거 bench/호환 시험용 코드다.
 실제 비행 경로가 아니며 live backend는 fail-closed 상태다. 최종 ROS 미션과
