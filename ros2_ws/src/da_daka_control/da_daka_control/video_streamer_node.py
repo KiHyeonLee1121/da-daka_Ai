@@ -4,13 +4,12 @@ import subprocess
 import time
 from typing import Optional
 
+from da_daka_control.video_streaming import build_rpicam_command
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
 from std_srvs.srv import SetBool
-
-from da_daka_control.video_streaming import build_rpicam_command
 
 
 class VideoStreamerNode(Node):

@@ -208,7 +208,8 @@ def project_panel_observation_attitude(
     camera_mount_rpy_rad: tuple[float, float, float] = (0.0, 0.0, 0.0),
     camera_offset_body_m: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> MetricPanelObservation:
-    """Project a panel to metric ENU using full attitude and a ground plane.
+    """
+    Project a panel to metric ENU using full attitude and a ground plane.
 
     The range is the slant distance along the calibrated camera centre ray.
     That ray fixes a local horizontal ground plane; panel centre and edge rays

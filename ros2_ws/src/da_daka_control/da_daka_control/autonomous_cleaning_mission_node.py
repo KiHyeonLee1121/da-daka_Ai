@@ -5,19 +5,6 @@ import math
 import time
 from typing import Callable, Optional
 
-from da_daka_interfaces.msg import PanelMap, PerceptionResult
-from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.msg import ExtendedState, State, SysStatus
-from mavros_msgs.srv import CommandBool, SetMode
-import rclpy
-from rclpy.executors import ExternalShutdownException
-from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import BatteryState, Range
-from std_msgs.msg import Bool, Float32, Int32, String
-from std_srvs.srv import SetBool, Trigger
-
 from da_daka_control.autonomous_cleaning_fsm import (
     AutonomousCleaningFsm,
     CleaningMissionState,
@@ -32,6 +19,18 @@ from da_daka_control.panel_distance_mission_fsm import (
 from da_daka_control.panel_mapping import PanelTarget
 from da_daka_control.panel_mission_fsm import StableArrival
 from da_daka_control.route_planner import plan_panel_route
+from da_daka_interfaces.msg import PanelMap, PerceptionResult
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from mavros_msgs.msg import ExtendedState, State, SysStatus
+from mavros_msgs.srv import CommandBool, SetMode
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import BatteryState, Range
+from std_msgs.msg import Bool, Float32, Int32, String
+from std_srvs.srv import SetBool, Trigger
 
 
 class AutonomousCleaningMissionNode(Node):

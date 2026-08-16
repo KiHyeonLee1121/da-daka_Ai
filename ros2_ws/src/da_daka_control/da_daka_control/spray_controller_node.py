@@ -2,17 +2,16 @@
 
 import json
 
-import rclpy
-from rclpy.executors import ExternalShutdownException
-from rclpy.node import Node
-from std_msgs.msg import Bool, String
-from std_srvs.srv import SetBool, Trigger
-
 from da_daka_control.spray_actuator import (
     GpioValveBackend,
     MockValveBackend,
     TimedSprayController,
 )
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool, Trigger
 
 
 class SprayControllerNode(Node):

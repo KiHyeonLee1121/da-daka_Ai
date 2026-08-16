@@ -5,13 +5,6 @@ import socket
 import time
 from typing import Optional
 
-from da_daka_interfaces.msg import PanelDetection, PerceptionResult
-import rclpy
-from rclpy.executors import ExternalShutdownException
-from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool, String
-
 from da_daka_control.perception_protocol import (
     decode_perception_packet,
     PerceptionPacket,
@@ -19,6 +12,12 @@ from da_daka_control.perception_protocol import (
     ProtocolConfig,
     SequenceTracker,
 )
+from da_daka_interfaces.msg import PanelDetection, PerceptionResult
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool, String
 
 
 class PerceptionReceiverNode(Node):
