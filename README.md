@@ -195,7 +195,10 @@ Pi 5에서 ROS 2 제어 노드와 MAVROS를 실행할 수 있도록
 - QGC/PX4 외부 모드 개입 우선 처리(RC 입력은 운용 구조에서 제외)
 - 거리제어 미션 CSV 로그
 
-현재 검출기는 딥러닝 모델이 아니라 OpenCV 기반. Raspberry Pi 5 + AI HAT+ 13 TOPS를 나중에 붙일 수 있도록 `hailo_dirt_detector.py` 인터페이스는 준비해 두었지만, 실제 Hailo HEF 모델 추론은 아직 연결하지 않음.
+이 목록은 `main.py` 기반 과거 bench MVP의 기능이다. 최종 비행 launch는 이
+검출기와 이동·분사 출력을 사용하지 않는다. 최종 오염 추론은 노트북의
+CUDA ONNX worker가 담당하며, 사용할 수 없는 Hailo backend를 선택하면 다른
+모델로 조용히 대체하지 않고 시작 단계에서 fail-closed 된다.
 
 ## 테스트 대상
 
@@ -490,26 +493,11 @@ detector:
 
 ## AI HAT+ 관련 상태
 
-현재 버전은 AI HAT+ 13 TOPS에서 실제 모델을 돌리는 상태는 아님.
-
-대신 다음을 준비해 두었음.
-
-- `BaseDirtDetector` 인터페이스
-- OpenCV 기반 detector
-- Hailo detector stub
-- config 기반 backend 선택 구조
-- 추후 `model_path`를 통한 HEF 모델 연결 자리
-
-지금 코드는 Raspberry Pi 5에서 가볍게 돌아가는 MVP이고, Hailo 모델 추론은 다음 단계임.
-
-Hailo를 실제로 쓰려면 별도로 해야 할 일이 있음.
-
-1. 아크릴판 이물질 이미지 데이터 수집
-2. 작은 detection 또는 segmentation 모델 학습
-3. INT8 양자화
-4. Hailo용 HEF 컴파일
-5. `hailo_dirt_detector.py`에 HailoRT 추론 연결
-6. Pi 5에서 FPS와 지연시간 측정
+AI HAT 연결은 최종 구조에서 사용하지 않는다. `detector.backend: hailo`는
+의도적으로 오류를 내며, OpenCV로 자동 fallback하지 않는다. 실제 추론 경로는
+`laptop_ai/`의 CUDA 전용 binary-segmentation worker 하나다. 학습된 ONNX
+가중치는 배포 입력이므로 저장소가 임의로 생성하지 않으며, 모델 경로와 출력
+contract는 `laptop_ai/config/laptop_ai.yaml`에서 검증한다.
 
 ## 기존 AI·분사 Mission FSM
 
@@ -629,7 +617,7 @@ python -m pytest tests
 
 실제 장비를 붙일 때는 아래 파일들을 우선 확인하면 됨.
 
-- `config/params.yaml`: 기존 AI 검출, ROI와 dry-run 설정 조정
+- `config/params.yaml`: 과거 bench MVP의 OpenCV/dry-run 시험에만 사용
 - `control/visual_servo.py`: ROS 이동명령 인터페이스가 확정될 때까지
   dry-run 검증에만 사용
 - ROS 2 TF-Luna 노드의 실제 표면별 신호 세기와 거리 안정성 검증
@@ -639,8 +627,10 @@ python -m pytest tests
   endpoint 확정
 - `control/mavlink_bridge.py`: 최종 live 구조에서는 비활성화하고, ROS 2
   Mission Manager와 동시에 실행하지 않음
-- `actuator/spray_command.py`: GPIO 또는 MAVLink actuator command 연결
-- `vision/panel_detector.py`: 필요하면 전체 화면 ROI 대신 패널 윤곽 검출 추가
-- `vision/hailo_dirt_detector.py`: Hailo HEF 모델 추론 연결
+- `ros2_ws/src/da_daka_control/config/spray_controller.yaml`: 실제 GPIO line,
+  polarity, pulse/cooldown/count 제한 설정
+- `ros2_ws/src/da_daka_control/config/panel_survey.yaml`: 실측 camera footprint와
+  장착 변환 설정
+- `laptop_ai/config/laptop_ai.yaml`: 노트북 IP, 학습된 ONNX 모델과 CUDA 성능 설정
 
 정렬 조건과 LiDAR 거리 조건이 로그에서 안정적으로 확인되기 전에는 실제 분사를 켜지 않는 것이 좋음.

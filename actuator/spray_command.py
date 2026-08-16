@@ -33,18 +33,15 @@ class MockSprayController(BaseSprayController):
 
     def spray(self, duration_s: float) -> SprayEvent:
         duration = self._clamp(duration_s)
-        logger.info("[DRY-RUN] mock spray pulse requested=%.3fs actual=%.3fs", duration_s, duration)
+        logger.info(
+            "[DRY-RUN] mock spray pulse requested=%.3fs actual=%.3fs",
+            duration_s,
+            duration,
+        )
         return SprayEvent(duration_s, duration, dry_run=True, backend="mock")
 
     def _clamp(self, duration_s: float) -> float:
         return max(self.min_duration_s, min(self.max_duration_s, float(duration_s)))
-
-
-class GPIOSprayController(MockSprayController):
-    def spray(self, duration_s: float) -> SprayEvent:
-        duration = self._clamp(duration_s)
-        logger.warning("GPIO spray backend is a placeholder. No GPIO output was toggled.")
-        return SprayEvent(duration_s, duration, dry_run=True, backend="gpio-placeholder")
 
 
 class MAVLinkSprayController(MockSprayController):
@@ -58,10 +55,16 @@ class MAVLinkSprayController(MockSprayController):
         return SprayEvent(duration_s, duration, dry_run=self.mavlink.dry_run, backend="mavlink")
 
 
-def create_spray_controller(spray_config: dict[str, Any], mavlink: MavlinkBridge) -> BaseSprayController:
+def create_spray_controller(
+    spray_config: dict[str, Any],
+    mavlink: MavlinkBridge,
+) -> BaseSprayController:
     backend = str(spray_config.get("backend", "mock")).lower()
     if backend == "gpio":
-        return GPIOSprayController(spray_config)
+        raise RuntimeError(
+            "Legacy Python GPIO spray is blocked. Use the ROS 2 "
+            "spray_controller GpioValveBackend with explicit output gates."
+        )
     if backend == "mavlink":
         return MAVLinkSprayController(spray_config, mavlink)
     if backend != "mock":

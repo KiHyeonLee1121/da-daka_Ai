@@ -74,7 +74,8 @@ Mission FSM, MAVLink bridge와 mock 분사를 한 프로세스에서 실행한�
 - 목표거리는 기본 1.6 m이며 ROS 2 거리제어의 1.0 m와 다르다.
 - `MissionFSM`이 이동 명령을 직접 만들기 때문에 ROS Mission Manager와
   동시에 live 실행할 수 없다.
-- GPIO와 실제 MAVLink 분사는 placeholder다.
+- legacy Python GPIO 분사는 fail-closed로 차단된다. 실제 GPIO 분사는 최종
+  ROS `spray_controller`의 libgpiod backend와 이중 enable gate만 사용한다.
 
 ### ROS 2 거리제어
 
