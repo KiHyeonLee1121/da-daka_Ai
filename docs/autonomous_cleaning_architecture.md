@@ -8,6 +8,7 @@
 | 기존 누락 | 생성된 구현 |
 |---|---|
 | 복수 패널의 실제 좌표 지도 | 실측 화각·LiDAR·MAVROS 전체 quaternion 기반 지면 교차와 다중 프레임 융합 |
+| 측량 프레임 안정성 | 7도 초과 기체 기울기 관측 거부 + 최소 3회 반복 관측 |
 | 무작위 배치 기반 이동 순서 | `route_planner.py`의 nearest-neighbour + 2-opt |
 | 전체 미션 상태관리 | `autonomous_cleaning_fsm.py`, `autonomous_cleaning_mission_node.py` |
 | 프레임 진입 감속 | `panel_visible_speed_mps`로 즉시 속도 제한 전환 |

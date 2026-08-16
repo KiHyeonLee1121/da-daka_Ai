@@ -182,6 +182,21 @@ def rotate_body_to_enu(
     )
 
 
+def quaternion_tilt_rad(
+    quaternion_xyzw: tuple[float, float, float, float],
+) -> float:
+    """Return vehicle tilt from local-up independent of yaw."""
+    if not _finite(*quaternion_xyzw):
+        raise ValueError('tilt quaternion values must be finite')
+    qx, qy, qz, qw = quaternion_xyzw
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if norm <= 1e-9:
+        raise ValueError('tilt quaternion norm is zero')
+    qx, qy = qx / norm, qy / norm
+    body_up_z = 1.0 - 2.0 * (qx * qx + qy * qy)
+    return math.acos(max(-1.0, min(1.0, body_up_z)))
+
+
 def _camera_ray_body(
     camera: CameraGroundModel,
     x_norm: float,

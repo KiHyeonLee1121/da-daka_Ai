@@ -26,5 +26,7 @@ panel_survey:
     merge_radius_m: 0.45
     minimum_observations: 3
     minimum_panel_confidence: 0.55
+    # Reject mapping frames outside the stable-hover envelope.
+    maximum_survey_tilt_deg: 7.0
     input_timeout_s: 0.5
     publish_rate_hz: 5.0

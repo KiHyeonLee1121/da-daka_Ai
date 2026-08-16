@@ -9,6 +9,7 @@ from da_daka_control.panel_mapping import (
     PanelObservation,
     project_panel_observation,
     project_panel_observation_attitude,
+    quaternion_tilt_rad,
 )
 import pytest
 
@@ -131,3 +132,15 @@ def test_full_attitude_projection_rejects_camera_facing_horizon():
             ),
             measured_center_distance_m=3.0,
         )
+
+
+def test_quaternion_tilt_is_yaw_independent_and_detects_roll():
+    yaw_90 = (0.0, 0.0, math.sin(math.pi / 4.0), math.cos(math.pi / 4.0))
+    roll_10 = (
+        math.sin(math.radians(5.0)),
+        0.0,
+        0.0,
+        math.cos(math.radians(5.0)),
+    )
+    assert quaternion_tilt_rad(yaw_90) == pytest.approx(0.0)
+    assert quaternion_tilt_rad(roll_10) == pytest.approx(math.radians(10.0))
