@@ -23,11 +23,13 @@ GPU 연결 시험은 `configuration_approved=false`,
 | Pi → 노트북 | 5006 | protocol-v1 `idle/survey/clean`, 활성 패널 ID, heartbeat |
 | 노트북 → Pi | 5005 | protocol-v2 패널·오염 결과와 inference time |
 
-기본 ID는 Pi `pi5-01`, 노트북 `laptop-ai-01`이다. Pi receiver는 노트북 IP,
-source ID, session, 증가하는 sequence/frame, timestamp, 값 범위와 timeout을
-검사한다. IP allowlist는 암호학적 인증이 아니므로 공용 Wi-Fi나 인터넷에 포트를
-노출하지 않는다. 전용 AP에서 DHCP reservation 또는 고정 IP를 사용하고,
-방화벽은 상대 장치 IP와 위 세 UDP 포트만 허용한다.
+기본 ID는 Pi `pi5-01`, 노트북 `laptop-ai-01`이다. 양쪽 receiver는 상대 IP,
+source ID, session, 증가하는 sequence/frame, 값 범위와 timeout을 검사한다.
+Pi control sender가 재시작되면 새 session ID를 만들므로 노트북 worker를 계속
+실행한 상태에서도 sequence가 안전하게 다시 시작된다. IP allowlist는 암호학적
+인증이 아니므로 공용 Wi-Fi나 인터넷에 포트를 노출하지 않는다. 전용 AP에서
+DHCP reservation 또는 고정 IP를 사용하고, 방화벽은 상대 장치 IP와 위 세 UDP
+포트만 허용한다.
 
 현재 패널 지도 ID는 **1부터 시작한다**. `clean` 모드에서
 `active_panel_id=0` 또는 음수인 결과는 Pi가 거부한다. 수동 통신 시험에는
@@ -81,6 +83,31 @@ worker 터미널은 연결 시험 동안 실행 상태로 둔다.
 
 ## Pi 통신 전용 시험
 
+### 권장 실행기
+
+ROS가 Docker 안에서 실행되고 `rpicam-vid`는 Pi 호스트에만 있는 배포에서는
+저장소의 통신 전용 실행기를 사용한다. 이 실행기는 호스트 카메라와 컨테이너의
+AI receiver/control sender만 함께 관리한다. MAVROS, 미션, TF-Luna, GPIO는
+시작하지 않는다. `Ctrl-C` 또는 한 프로세스의 비정상 종료 시 둘 다 정리된다.
+
+```bash
+python3 tools/edge_gpu_link.py \
+  --laptop-ip <LAPTOP_IP> \
+  --workspace <ACTIVE_REPOSITORY>/ros2_ws
+```
+
+카메라·Docker image·ROS overlay·UDP 5005 충돌만 확인하려면:
+
+```bash
+python3 tools/edge_gpu_link.py \
+  --laptop-ip <LAPTOP_IP> \
+  --workspace <ACTIVE_REPOSITORY>/ros2_ws \
+  --preflight-only
+```
+
+자동 시험에서는 `--duration 15`처럼 제한시간을 줄 수 있다. 기본값 `0`은
+운용자가 중단할 때까지 실행한다.
+
 ### 카메라 실행 위치 확인
 
 `video_streamer`가 실행되는 환경 안에서 `rpicam-vid`를 찾을 수 있어야 한다.
@@ -89,7 +116,7 @@ Pi의 ROS 컨테이너에 `rpicam-vid`가 없다면 통합 launch의 video strea
 producer로 실행하고, ROS 컨테이너에서는 receiver와 control sender만 실행한다.
 두 방식의 카메라 producer를 동시에 실행하지 않는다.
 
-Pi 호스트 카메라 송출 예시:
+문제 분석을 위해 각각 수동 실행해야 할 때의 Pi 호스트 카메라 송출 예시:
 
 ```bash
 rpicam-vid -t 0 -n \
@@ -139,6 +166,7 @@ ros2 topic hz /ai/perception
 - receiver state가 `HEALTHY`이며 rejected packet이 계속 증가하지 않는다.
 - `/ai/health=true`이고 `/ai/perception` sequence가 증가한다.
 - `source_id=laptop-ai-01`이고 session ID가 연결 중 일관된다.
+- Pi 통신 프로세스만 재시작해도 새 control session으로 자동 복구된다.
 - `idle`에서는 `valid=false`와 fail-closed 사유가 반환된다.
 - `survey`에서는 GPU inference time이 포함된 protocol-v2 결과가 반환된다.
 - `clean` 시험은 1 이상의 panel ID를 사용한다.

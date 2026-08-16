@@ -3,10 +3,12 @@
 import json
 import socket
 import time
+import uuid
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+
 from std_msgs.msg import Int32, String
 
 
@@ -14,6 +16,7 @@ class PerceptionControlSenderNode(Node):
     """Publish a small idempotent UDP control heartbeat to the laptop."""
 
     def __init__(self) -> None:
+        """Create a new restart-safe control heartbeat session."""
         super().__init__('perception_control_sender')
         self.declare_parameter('laptop_ip', '127.0.0.1')
         self.declare_parameter('laptop_port', 5006)
@@ -30,6 +33,7 @@ class PerceptionControlSenderNode(Node):
         self._mode = 'idle'
         self._panel_id = -1
         self._sequence = 0
+        self._session_id = str(uuid.uuid4())
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.create_subscription(
             String, '/ai/requested_mode', self._mode_callback, 10
@@ -56,6 +60,7 @@ class PerceptionControlSenderNode(Node):
             {
                 'protocol_version': 1,
                 'source_id': self._source_id,
+                'session_id': self._session_id,
                 'sequence': self._sequence,
                 'send_timestamp_ns': time.time_ns(),
                 'mode': self._mode,
