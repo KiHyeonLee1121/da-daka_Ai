@@ -81,6 +81,31 @@ da-daka-laptop-ai --config laptop_ai/config/laptop_ai.yaml
 `da-daka-nvidia-check`와 실제 ONNX 연산에서 `CUDAExecutionProvider`를 확인한다.
 worker 터미널은 연결 시험 동안 실행 상태로 둔다.
 
+## GPU 노트북에서 Pi 카메라 전송 시작
+
+노트북이 Pi에 SSH 공개키로 접속할 수 있으면, 별도 노트북 터미널에서 다음
+스크립트를 실행해 Pi 카메라와 ROS edge link를 원격으로 함께 시작할 수 있다.
+
+```bash
+chmod +x tools/gpu_laptop_start_pi_camera.sh
+./tools/gpu_laptop_start_pi_camera.sh
+```
+
+기본값은 2026-08-16 시험 환경인 Pi `172.29.215.181`, 노트북
+`172.29.215.126`이다. 주소나 Pi checkout 위치가 다르면 실행할 때 바꾼다.
+
+```bash
+PI_IP=<PI_IP> \
+LAPTOP_IP=<LAPTOP_IP> \
+PI_PROJECT=<PI_REPOSITORY> \
+./tools/gpu_laptop_start_pi_camera.sh
+```
+
+이 스크립트는 노트북의 추론 worker를 시작하지 않는다. 위의 worker 터미널을
+먼저 유지한 뒤 카메라 전송 터미널도 계속 열어 둔다. 카메라 전송을 끝낼 때
+`Ctrl-C`를 누르면 SSH를 통해 Pi의 카메라와 통신 컨테이너가 함께 정리된다.
+MAVROS, 미션, TF-Luna와 분사 GPIO는 시작하지 않는다.
+
 ## Pi 통신 전용 시험
 
 ### 권장 실행기

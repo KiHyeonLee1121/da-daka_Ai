@@ -96,7 +96,9 @@ flowchart TB
 
 Pi의 ROS 2가 Docker 안에서 실행되고 카메라 도구가 호스트에만 있는 경우,
 `tools/edge_gpu_link.py`로 비행 노드 없이 카메라와 GPU 통신 경로만 실행할 수
-있다. 자세한 설정과 판정 기준은 GPU offload runbook을 따른다.
+있다. GPU 노트북에서 Pi 송출을 원격으로 시작하려면
+`tools/gpu_laptop_start_pi_camera.sh`를 사용한다. 자세한 설정과 판정 기준은 GPU
+offload runbook을 따른다.
 
 루트의 `main.py`와 `control/`, `vision/` 등은 과거 bench/호환 시험용 코드다.
 실제 비행 경로가 아니며 live backend는 fail-closed 상태다. 최종 ROS 미션과
