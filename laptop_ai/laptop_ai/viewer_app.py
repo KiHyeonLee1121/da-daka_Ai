@@ -9,7 +9,6 @@ from pathlib import Path
 import yaml
 
 from laptop_ai.visualization import OpenCvViewer
-from laptop_ai.worker import LaptopAiWorker
 
 
 def default_config_path() -> Path:
@@ -91,6 +90,11 @@ def main() -> int:
             ),
             fullscreen=fullscreen,
         )
+        # Keep config/overlay unit tests independent from PyAV. The video
+        # worker and its production dependencies are required only when the
+        # application actually starts.
+        from laptop_ai.worker import LaptopAiWorker
+
         worker = LaptopAiWorker(config, viewer=viewer)
     except (KeyError, OSError, RuntimeError, ValueError) as exc:
         logging.getLogger('laptop_ai.viewer').error('startup failed: %s', exc)
