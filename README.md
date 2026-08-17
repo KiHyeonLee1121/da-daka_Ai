@@ -179,8 +179,8 @@ da-daka-nvidia-check
 
 `da-daka-laptop-ai-viewer`는 별도의 영상 수신기나 두 번째 AI가 아니다. 기존
 노트북 worker가 UDP 5600에서 한 번 decode한 프레임과 같은 CUDA 추론 결과를
-화면에 그린다. 따라서 headless `da-daka-laptop-ai`와 viewer를 동시에 실행하지
-않는다. 두 프로세스가 같은 UDP 포트를 사용할 수 없다.
+화면에 그리는 통합 응용프로그램이다. 이 viewer 하나가 영상 수신, CUDA 추론,
+결과 전송과 시각화를 모두 담당한다.
 
 학습된 모델을 `models/dirt_segmentation.onnx`에 놓은 뒤 다음 실행기 하나로
 가상환경 생성, 패키지 설치, NVIDIA/CUDA 점검과 모니터 실행을 진행할 수 있다.
@@ -227,17 +227,10 @@ IP/source ID, session, 증가하는 sequence/frame, timestamp, 값 범위와 tim
 ### 1. 노트북 AI
 
 `laptop_ai/config/laptop_ai.yaml`에서 학습 모델 경로와 실제 Pi IP를 설정한다.
-현장에서는 카메라와 판정 결과를 함께 확인할 수 있는 viewer 실행을 권장한다.
+노트북 AI는 카메라와 판정 결과를 함께 확인하는 viewer로 실행한다.
 
 ```bash
 ./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP>
-```
-
-화면이 필요 없는 자동 운용에서는 기존 headless worker를 실행한다.
-
-```bash
-source .venv/bin/activate
-da-daka-laptop-ai --config laptop_ai/config/laptop_ai.yaml
 ```
 
 실제 모델과 영상으로 지연과 정확도를 측정할 때 사용한다.

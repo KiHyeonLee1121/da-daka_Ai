@@ -1,4 +1,4 @@
-# DA-DAKA laptop AI worker
+# DA-DAKA laptop AI monitor
 
 This process borrows the laptop's NVIDIA CUDA resources while the Raspberry
 Pi 5 remains the sole mission and flight-control owner.
@@ -21,11 +21,9 @@ provider and opens the monitor. Put the trained model at
 `models/dirt_segmentation.onnx`, or pass `--model <ONNX_PATH>`. Use
 `--skip-install` after the first successful setup.
 
-The monitor is the production worker with an optional OpenCV window. It uses
-the worker's single UDP decoder and the exact same panel/dirt result sent to
-the Pi; it does not receive the video or run ONNX a second time. Do not run
-`da-daka-laptop-ai` and `da-daka-laptop-ai-viewer` together because both own
-UDP 5600 and 5006.
+The monitor is the only user-facing laptop AI runtime. Internally it uses one
+UDP decoder and sends the exact same panel/dirt result drawn in the OpenCV
+window to the Pi; video reception and ONNX inference are not duplicated.
 
 Overlay legend and keys:
 
@@ -43,15 +41,7 @@ PI_IP=<PI_IP> LAPTOP_IP=<LAPTOP_IP> PI_PROJECT=<PI_REPOSITORY> \
   ./tools/gpu_laptop_start_pi_camera.sh
 ```
 
-For unattended operation without a window, install the package and keep the
-original entry point:
-
-```bash
-python -m pip install -e ./laptop_ai
-da-daka-laptop-ai --config laptop_ai/config/laptop_ai.yaml
-```
-
-The worker rejects CPU-only ONNX Runtime. It decodes the Pi's low-latency
+The application rejects CPU-only ONNX Runtime. It decodes the Pi's low-latency
 MPEG-TS/H.264 stream through PyAV/FFmpeg on UDP 5600, receives mission mode on
 UDP 5006 only from the configured Pi IP/source ID, and sends validated
 protocol-v2 results to the Pi on UDP 5005. The Pi mission launch applies the
