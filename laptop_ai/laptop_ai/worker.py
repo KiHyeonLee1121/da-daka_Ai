@@ -1,14 +1,11 @@
 """Receive Pi video, run GTX/RTX CUDA inference and return typed results."""
 
-import argparse
 import logging
-from pathlib import Path
 import socket
 import time
 import uuid
 
 import av
-import yaml
 
 from laptop_ai.control_protocol import ControlReceiver
 from laptop_ai.panel_detector import PanelDetector, select_panel_nearest_target
@@ -388,27 +385,3 @@ class LaptopAiWorker:
             self.video.close()
             self.control_socket.close()
             self.result_socket.close()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', required=True)
-    arguments = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
-    )
-    config_path = Path(arguments.config)
-    with config_path.open('r', encoding='utf-8') as stream:
-        config = yaml.safe_load(stream)
-    worker = LaptopAiWorker(config)
-    try:
-        worker.run()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        worker.close()
-
-
-if __name__ == '__main__':
-    main()

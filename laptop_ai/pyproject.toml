@@ -23,7 +23,6 @@ tools = [
 ]
 
 [project.scripts]
-da-daka-laptop-ai = "laptop_ai.worker:main"
 da-daka-laptop-ai-viewer = "laptop_ai.viewer_app:main"
 da-daka-nvidia-check = "laptop_ai.nvidia_check:main"
 da-daka-segmentation-benchmark = "laptop_ai.segmentation_benchmark:main"
