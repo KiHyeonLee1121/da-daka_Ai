@@ -175,6 +175,37 @@ da-daka-nvidia-check
 노트북 worker는 CPU-only ONNX Runtime으로 실제 판단을 대신하지 않고 시작을
 거부한다.
 
+#### Pi 카메라·AI 인식 결과 모니터
+
+`da-daka-laptop-ai-viewer`는 별도의 영상 수신기나 두 번째 AI가 아니다. 기존
+노트북 worker가 UDP 5600에서 한 번 decode한 프레임과 같은 CUDA 추론 결과를
+화면에 그린다. 따라서 headless `da-daka-laptop-ai`와 viewer를 동시에 실행하지
+않는다. 두 프로세스가 같은 UDP 포트를 사용할 수 없다.
+
+학습된 모델을 `models/dirt_segmentation.onnx`에 놓은 뒤 다음 실행기 하나로
+가상환경 생성, 패키지 설치, NVIDIA/CUDA 점검과 모니터 실행을 진행할 수 있다.
+
+```bash
+chmod +x tools/start_laptop_ai_viewer.sh
+./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP>
+```
+
+다른 모델 위치를 사용할 때는 `--model <ONNX_PATH>`, 전체 화면은
+`--fullscreen`, 이미 설치가 끝난 뒤 빠르게 다시 실행할 때는 `--skip-install`을
+추가한다. 창에는 다음 정보가 같은 카메라 프레임 위에 표시된다.
+
+- 파란색: 검출한 모든 패널 후보
+- 초록색: 현재 청소 대상으로 선택한 패널
+- 빨간색: segmentation이 찾은 오염 bbox와 중심점
+- 상단: Pi control 연결, 임무 모드, 패널 ID, frame, 추론시간과 화면 FPS
+- 하단: idle, 결과 차단, 패널/오염 판정 상태
+
+`Q` 또는 `Esc`는 종료, `S`는 오버레이 화면 저장, `F`는 전체 화면 전환이다.
+스크린샷 기본 위치는 `logs/laptop_ai_viewer`다. 모니터를 먼저 실행한 뒤 다른
+터미널에서 기존 `tools/gpu_laptop_start_pi_camera.sh`로 Pi 카메라 송출을
+시작한다. SSH 원격 시작을 사용하지 않을 때는 Pi에서 `edge_gpu_link.py` 또는
+ROS `video_streamer`를 단 하나만 실행한다.
+
 ## 네트워크 데이터 흐름
 
 | 방향 | UDP 포트 | 데이터 |
@@ -193,9 +224,16 @@ IP/source ID, session, 증가하는 sequence/frame, timestamp, 값 범위와 tim
 저장소의 숫자는 안전한 기본값 또는 예시일 뿐이다. 아래 `직접 해야 할 작업`을
 끝내기 전에는 승인값을 `true`로 바꾸거나 실제 GPIO 출력을 켜지 않는다.
 
-### 1. 노트북 worker
+### 1. 노트북 AI
 
 `laptop_ai/config/laptop_ai.yaml`에서 학습 모델 경로와 실제 Pi IP를 설정한다.
+현장에서는 카메라와 판정 결과를 함께 확인할 수 있는 viewer 실행을 권장한다.
+
+```bash
+./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP>
+```
+
+화면이 필요 없는 자동 운용에서는 기존 headless worker를 실행한다.
 
 ```bash
 source .venv/bin/activate
@@ -448,7 +486,6 @@ PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
 - [현장 좌표·카메라 진단](docs/field_diagnostics.md)
 - [브랜치 통합 감사 기록](docs/branch_consolidation.md)
 - [노트북 AI worker](laptop_ai/README.md)
-- [모바일 카메라 진단 릴레이](docs/mobile_camera_relay.md)
 
 이 저장소의 `main`은 최종 소프트웨어 기준선이다. 실제 기체별 값은 예시와
 분리해 관리하고, 실측·bench·SITL·단계별 실기 시험 기록 없이는 비행 준비 완료로

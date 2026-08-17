@@ -74,7 +74,7 @@ def translate_dirt_to_frame(dirt, panel, frame_width, frame_height):
 class LaptopAiWorker:
     """Single laptop process for video decode, perception and UDP output."""
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, *, viewer=None) -> None:
         tuning = RuntimeTuning.from_mapping(config.get('performance'))
         configure_cuda_environment(tuning)
         configure_opencv(tuning)
@@ -85,7 +85,9 @@ class LaptopAiWorker:
         panel = config['panel_detector']
         model = config['dirt_model']
         self.source_id = str(network['source_id'])
-        self.pi_address = (str(network['pi_ip']), int(network['result_port']))
+        self.pi_ip = str(network['pi_ip'])
+        self.pi_address = (self.pi_ip, int(network['result_port']))
+        self.viewer = viewer
         self.control_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.control_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.control_socket.bind((str(network['control_bind']), int(network['control_port'])))
@@ -151,15 +153,44 @@ class LaptopAiWorker:
             control = self.control.state()
             frame = self.video.read()
             self.frame_id += 1
+            control_connected = bool(control.session_id) or control.sequence > 0
             if control.mode == 'idle':
                 now_s = time.monotonic()
                 if now_s - self._last_idle_send_s >= self.idle_heartbeat_s:
                     self._send_idle(frame, control.active_panel_id)
                     self._last_idle_send_s = now_s
+                if not self._show_frame(
+                    frame,
+                    mode='idle',
+                    active_panel_id=control.active_panel_id,
+                    control_connected=control_connected,
+                    panels=[],
+                    selected=None,
+                    valid=False,
+                    panel_visible=False,
+                    dirt_found=False,
+                    dirt_values=dict(ZERO_DIRT),
+                    inference_ms=0.0,
+                    invalid_reason='mission-idle-or-control-stale',
+                ):
+                    return
                 continue
-            self._process_frame(frame, control.mode, control.active_panel_id)
+            if not self._process_frame(
+                frame,
+                control.mode,
+                control.active_panel_id,
+                control_connected=control_connected,
+            ):
+                return
 
-    def _process_frame(self, frame, mode: str, panel_id: int) -> None:
+    def _process_frame(
+        self,
+        frame,
+        mode: str,
+        panel_id: int,
+        *,
+        control_connected: bool = True,
+    ) -> bool:
         capture_ns = time.time_ns()
         started_s = time.perf_counter()
         panels = self.panel_detector.detect(frame)
@@ -227,6 +258,66 @@ class LaptopAiWorker:
             inference_ms=inference_ms,
             invalid_reason=invalid_reason,
         )
+        return self._show_frame(
+            frame,
+            mode=mode,
+            active_panel_id=panel_id,
+            control_connected=control_connected,
+            panels=panels,
+            selected=selected,
+            valid=valid,
+            panel_visible=panel_visible,
+            dirt_found=dirt_found,
+            dirt_values=dirt_values,
+            inference_ms=inference_ms,
+            invalid_reason=invalid_reason,
+        )
+
+    def _show_frame(
+        self,
+        frame,
+        *,
+        mode,
+        active_panel_id,
+        control_connected,
+        panels,
+        selected,
+        valid,
+        panel_visible,
+        dirt_found,
+        dirt_values,
+        inference_ms,
+        invalid_reason,
+    ) -> bool:
+        """Give the existing result to the optional UI without new inference."""
+        if self.viewer is None:
+            return True
+        from laptop_ai.visualization import VisualizationState
+
+        state = VisualizationState(
+            mode=mode,
+            active_panel_id=active_panel_id,
+            frame_id=self.frame_id,
+            control_connected=control_connected,
+            valid=valid,
+            panel_visible=panel_visible,
+            dirt_found=dirt_found,
+            inference_ms=inference_ms,
+            invalid_reason=invalid_reason,
+            model_name=self.dirt_detector.model_name,
+            pi_ip=self.pi_ip,
+            target_x_norm=self.target_x_norm,
+            target_y_norm=self.target_y_norm,
+            dirt_values=dirt_values,
+        )
+        return bool(
+            self.viewer.show(
+                frame,
+                panels=panels,
+                selected=selected,
+                state=state,
+            )
+        )
 
     def _send_idle(self, frame, panel_id: int) -> None:
         now_ns = time.time_ns()
@@ -290,9 +381,13 @@ class LaptopAiWorker:
         self.result_socket.sendto(payload, self.pi_address)
 
     def close(self) -> None:
-        self.video.close()
-        self.control_socket.close()
-        self.result_socket.close()
+        try:
+            if self.viewer is not None:
+                self.viewer.close()
+        finally:
+            self.video.close()
+            self.control_socket.close()
+            self.result_socket.close()
 
 
 def main() -> None:

@@ -53,3 +53,10 @@ runtime:
   idle_heartbeat_s: 0.25
   # Observe-only until real bitrate/inference/accuracy profiles are measured.
   optimizer_config: "laptop_ai/config/pendulum_optimization.yaml"
+
+viewer:
+  # The viewer uses the worker's decoded frame and inference result; it does
+  # not open a second UDP receiver or run a second model.
+  window_title: "DA-DAKA Laptop AI Monitor"
+  screenshot_directory: "logs/laptop_ai_viewer"
+  fullscreen: false

@@ -24,8 +24,7 @@ read live from MAVROS during the actual mission.
 
 - `camera_capture_proxy.py` and `rpicam-still-proxy` support sharp burst stills
   when the camera is outside a ROS container.
-- `mobile_camera_relay.py` lets a phone supply a temporary diagnostic camera.
 
 Stop `rpicam-vid` before running a still-capture proxy. Only one process may own
-the Raspberry Pi camera. These helpers are not started by
+the Raspberry Pi camera. These tools are not started by
 `autonomous_cleaning.launch.py`.
