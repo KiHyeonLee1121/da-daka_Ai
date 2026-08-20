@@ -99,7 +99,6 @@ flowchart TB
 | `ros2_ws/src/da_daka_interfaces` | ROS 2 사용자 정의 메시지 |
 | `laptop_ai` | CUDA 전용 ONNX 추론 worker와 성능 측정 도구 |
 | `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
-| `docs/real_vehicle_cleaning_acceptance.md` | Pi 설치 후 실기체 전기·분사·비행 합격 체크리스트 |
 | `docs/edge_gpu_offload_runbook.md` | Pi–노트북 GPU offload 연결, 안전 점검과 2026-08-16 현장 검증 결과 |
 | `docs/field_diagnostics.md` | 좌표 투영과 카메라 진단 절차 |
 | `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
