@@ -61,6 +61,7 @@ jobs:
             ros2_ws/src/da_daka_control/test/test_perception_protocol.py \
             ros2_ws/src/da_daka_control/test/test_route_planner.py \
             ros2_ws/src/da_daka_control/test/test_spray_actuator.py \
+            ros2_ws/src/da_daka_control/test/test_spray_sequence.py \
             ros2_ws/src/da_daka_control/test/test_video_streamer.py
 
   ros2-jazzy:

@@ -8,7 +8,7 @@ Raspberry Pi 5가 노트북의 NVIDIA GPU를 영상 추론 자원으로만 빌�
 | 장치 | 담당 | 금지되는 역할 |
 |---|---|---|
 | Raspberry Pi 5 | 카메라 송신, 센서, 지도·경로, 미션 FSM, MAVROS setpoint, 분사, 복귀·착륙 | CUDA 추론 |
-| NVIDIA 노트북 | 영상 decode, 패널 검출, ONNX 오염 segmentation, 추론 결과 송신 | MAVLink/MAVROS, ARM, mode, setpoint, GPIO 명령 |
+| NVIDIA 노트북 | 영상 decode, 패널 검출, ONNX 오염 segmentation, 추론 결과 송신 | MAVLink/MAVROS, ARM, mode, setpoint, Pixhawk 분사 명령 |
 
 GPU 연결 시험은 `configuration_approved=false`,
 `calibration_approved=false`, `spray_backend=mock`,
@@ -104,7 +104,7 @@ PI_PROJECT=<PI_REPOSITORY> \
 이 스크립트는 노트북의 추론 worker를 시작하지 않는다. 위의 worker 터미널을
 먼저 유지한 뒤 카메라 전송 터미널도 계속 열어 둔다. 카메라 전송을 끝낼 때
 `Ctrl-C`를 누르면 SSH를 통해 Pi의 카메라와 통신 컨테이너가 함께 정리된다.
-MAVROS, 미션, TF-Luna와 분사 GPIO는 시작하지 않는다.
+MAVROS, 미션, TF-Luna와 Pixhawk 분사 노드는 시작하지 않는다.
 
 ## Pi 통신 전용 시험
 
@@ -112,7 +112,7 @@ MAVROS, 미션, TF-Luna와 분사 GPIO는 시작하지 않는다.
 
 ROS가 Docker 안에서 실행되고 `rpicam-vid`는 Pi 호스트에만 있는 배포에서는
 저장소의 통신 전용 실행기를 사용한다. 이 실행기는 호스트 카메라와 컨테이너의
-AI receiver/control sender만 함께 관리한다. MAVROS, 미션, TF-Luna, GPIO는
+AI receiver/control sender만 함께 관리한다. MAVROS, 미션, TF-Luna, 분사 노드는
 시작하지 않는다. `Ctrl-C` 또는 한 프로세스의 비정상 종료 시 둘 다 정리된다.
 
 ```bash
@@ -240,4 +240,4 @@ GPU 연결 성공만으로 자율 비행이나 분사를 승인하지 않는다.
 - 실제 학습 모델 SHA-256, 입출력 shape, CUDA provider와 정확도 검증
 - 실제 영상에서 decode·inference end-to-end latency와 GPU 온도/throttling 측정
 - control heartbeat, 영상, 결과 스트림을 각각 끊었을 때 fail-closed 검증
-- 카메라·LiDAR·노즐 실측 보정, GPIO bench test, SITL과 단계별 실비행 승인
+- 카메라·LiDAR·노즐 실측 보정, Pixhawk AUX5 bench test, SITL과 단계별 실비행 승인

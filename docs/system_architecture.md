@@ -74,8 +74,9 @@ Mission FSM, MAVLink bridge와 mock 분사를 한 프로세스에서 실행한�
 - 목표거리는 기본 1.6 m이며 ROS 2 거리제어의 1.0 m와 다르다.
 - `MissionFSM`이 이동 명령을 직접 만들기 때문에 ROS Mission Manager와
   동시에 live 실행할 수 없다.
-- legacy Python GPIO 분사는 fail-closed로 차단된다. 실제 GPIO 분사는 최종
-  ROS `spray_controller`의 libgpiod backend와 이중 enable gate만 사용한다.
+- legacy Python GPIO 분사는 사용하지 않는다. 실제 분사는 최종 ROS
+  `spray_controller`가 MAVROS를 통해 Pixhawk Camera Trigger one-shot을 보내고,
+  Pixhawk AUX5가 DRV8876 `EN/IN1`을 구동한다.
 
 ### ROS 2 거리제어
 
@@ -155,7 +156,7 @@ QGC/PX4에 있다. RC 입력은 이 운용 구조에서 사용하지 않는다.
 
 - Pixhawk serial 장치/baud와 `mavlink-router` endpoint 확정
 - 학습·검증된 오염 세그멘테이션 ONNX 모델 배치
-- TF-Luna/카메라/노즐 장착 변환과 GPIO 회로 실측
+- TF-Luna/카메라/노즐 장착 변환과 AUX5/DRV8876 회로 실측
 - 노트북 GPU 지연과 Pi↔노트북 가용 대역폭 프로파일 측정
 - PX4 OFFBOARD-loss/data-link-loss 설정, SITL 및 단계별 실기체 시험
 

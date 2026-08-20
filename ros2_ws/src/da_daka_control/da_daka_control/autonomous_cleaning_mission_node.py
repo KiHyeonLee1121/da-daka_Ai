@@ -19,6 +19,11 @@ from da_daka_control.panel_distance_mission_fsm import (
 from da_daka_control.panel_mapping import PanelTarget
 from da_daka_control.panel_mission_fsm import StableArrival
 from da_daka_control.route_planner import plan_panel_route
+from da_daka_control.spray_sequence import (
+    perception_is_newer,
+    PerceptionBarrier,
+    SprayCycleTracker,
+)
 from da_daka_interfaces.msg import PanelMap, PerceptionResult
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import ExtendedState, State, SysStatus
@@ -49,6 +54,7 @@ class AutonomousCleaningMissionNode(Node):
         CleaningMissionState.DESCEND,
         CleaningMissionState.PRECISION_ALIGN,
         CleaningMissionState.SPRAY,
+        CleaningMissionState.POST_SPRAY_ALIGN,
         CleaningMissionState.VERIFY,
     }
 
@@ -147,6 +153,7 @@ class AutonomousCleaningMissionNode(Node):
         self.declare_parameter('require_live_spray', True)
         self.declare_parameter('survey_duration_s', 3.0)
         self.declare_parameter('spray_distance_m', 1.0)
+        self.declare_parameter('spray_duration_s', 3.0)
         self.declare_parameter('maximum_survey_panels', 32)
         self.declare_parameter('max_spray_attempts', 3)
         self.declare_parameter('arrival_tolerance_m', 0.25)
@@ -167,7 +174,6 @@ class AutonomousCleaningMissionNode(Node):
         self.declare_parameter('prestream_s', 2.0)
         self.declare_parameter('perception_stable_s', 0.5)
         self.declare_parameter('alignment_stable_s', 0.7)
-        self.declare_parameter('verification_settle_s', 1.0)
         self.declare_parameter('yaw_tolerance_deg', 5.0)
         self.declare_parameter('launch_yaw_stable_s', 1.0)
         self.declare_parameter('launch_yaw_max_deviation_deg', 2.0)
@@ -197,6 +203,7 @@ class AutonomousCleaningMissionNode(Node):
         self._require_live_spray = bool(value('require_live_spray'))
         self._survey_duration_s = float(value('survey_duration_s'))
         self._spray_distance_m = float(value('spray_distance_m'))
+        self._spray_duration_s = float(value('spray_duration_s'))
         self._maximum_survey_panels = int(value('maximum_survey_panels'))
         self._max_spray_attempts = int(value('max_spray_attempts'))
         self._arrival_tolerance_m = float(value('arrival_tolerance_m'))
@@ -221,7 +228,6 @@ class AutonomousCleaningMissionNode(Node):
         self._prestream_s = float(value('prestream_s'))
         self._perception_stable_s = float(value('perception_stable_s'))
         self._alignment_stable_s = float(value('alignment_stable_s'))
-        self._verification_settle_s = float(value('verification_settle_s'))
         self._yaw_tolerance_rad = math.radians(float(value('yaw_tolerance_deg')))
         self._launch_yaw_stable_s = float(value('launch_yaw_stable_s'))
         self._launch_yaw_max_deviation_rad = math.radians(
@@ -246,6 +252,7 @@ class AutonomousCleaningMissionNode(Node):
         positive = (
             self._survey_duration_s,
             self._spray_distance_m,
+            self._spray_duration_s,
             self._arrival_tolerance_m,
             self._arrival_max_speed_mps,
             self._arrival_stable_s,
@@ -269,6 +276,10 @@ class AutonomousCleaningMissionNode(Node):
             raise ValueError('panel-visible speed must not exceed cruise speed')
         if self._maximum_survey_panels <= 0 or self._max_spray_attempts <= 0:
             raise ValueError('panel/attempt limits must be positive')
+        if self._max_spray_attempts != 3:
+            raise ValueError('max_spray_attempts must be exactly 3')
+        if not math.isclose(self._spray_duration_s, 3.0, abs_tol=1e-9):
+            raise ValueError('spray_duration_s must be exactly 3.0 seconds')
 
     def _create_subscriptions(self, latched_qos) -> None:
         self.create_subscription(State, '/mavros/state', self._state_cb, 10)
@@ -424,6 +435,10 @@ class AutonomousCleaningMissionNode(Node):
         self._vertical_mode = 'DISABLED'
         self._altitude_guard_triggered = False
         self._spray_output_enabled: Optional[bool] = None
+        self._spray_backend: Optional[str] = None
+        self._spray_status_time_s: Optional[float] = None
+        self._spray_cycle = SprayCycleTracker()
+        self._post_spray_barrier: Optional[PerceptionBarrier] = None
         self._legacy_mission_state = 'IDLE'
         self._panel_mission_state = 'IDLE'
         self._state_started_s = time.monotonic()
@@ -434,10 +449,10 @@ class AutonomousCleaningMissionNode(Node):
         self._setpoint_speed_mps = 0.0
         self._last_setpoint_s = self._state_started_s
         self._survey_started_s: Optional[float] = None
-        self._verify_started_s: Optional[float] = None
         self._pending_action: Optional[str] = None
         self._last_action_s: dict[str, float] = {}
         self._spray_session_enabled = False
+        self._spray_stop_requested = False
         self._abort_land_requested = False
 
     # -- telemetry callbacks -------------------------------------------------
@@ -555,8 +570,11 @@ class AutonomousCleaningMissionNode(Node):
             status = json.loads(message.data)
             self._spray_output_enabled = bool(status['output_enabled'])
             self._spray_session_enabled = bool(status['session_enabled'])
+            self._spray_backend = str(status['backend'])
+            self._spray_status_time_s = time.monotonic()
         except (json.JSONDecodeError, KeyError, TypeError):
             self._spray_output_enabled = None
+            self._spray_backend = None
 
     def _legacy_mission_cb(self, message: String) -> None:
         self._legacy_mission_state = str(message.data)
@@ -617,10 +635,12 @@ class AutonomousCleaningMissionNode(Node):
         self._command_xyz = None
         self._setpoint_speed_mps = 0.0
         self._survey_started_s = None
-        self._verify_started_s = None
         self._pending_action = None
         self._last_action_s.clear()
         self._spray_session_enabled = False
+        self._spray_cycle.reset()
+        self._post_spray_barrier = None
+        self._spray_stop_requested = False
         self._abort_land_requested = False
         self._arrival.reset()
         self._perception_window.reset()
@@ -675,6 +695,7 @@ class AutonomousCleaningMissionNode(Node):
             CleaningMissionState.ASSESS: self._tick_assess,
             CleaningMissionState.PRECISION_ALIGN: self._tick_align,
             CleaningMissionState.SPRAY: self._tick_spray,
+            CleaningMissionState.POST_SPRAY_ALIGN: self._tick_post_spray_align,
             CleaningMissionState.VERIFY: self._tick_verify,
             CleaningMissionState.RETURN_HOME: self._tick_return_home,
             CleaningMissionState.LAND: self._tick_land,
@@ -690,7 +711,10 @@ class AutonomousCleaningMissionNode(Node):
             return self._survey_timeout_s
         if state == CleaningMissionState.REACQUIRE:
             return self._reacquire_timeout_s
-        if state == CleaningMissionState.VERIFY:
+        if state in {
+            CleaningMissionState.POST_SPRAY_ALIGN,
+            CleaningMissionState.VERIFY,
+        }:
             return self._verification_timeout_s
         return self._state_timeout_s
 
@@ -745,8 +769,18 @@ class AutonomousCleaningMissionNode(Node):
                 'expected this mission to be the only MAVROS position '
                 f'publisher ({position_publishers} found)'
             )
-        if self._require_live_spray and not self._spray_output_enabled:
-            failures.append('live spray output is unavailable or blocked')
+        if self._require_live_spray:
+            if not self._spray_output_enabled:
+                failures.append('live spray output is unavailable or blocked')
+            if self._spray_backend != 'pixhawk':
+                failures.append(
+                    'live spray requires the Pixhawk Camera Trigger backend'
+                )
+        if (
+            self._spray_status_time_s is None
+            or now_s - self._spray_status_time_s > self._status_timeout_s
+        ):
+            failures.append('spray status is unavailable or stale')
         if failures:
             self._fail('preflight failed: ' + '; '.join(failures), False)
             return
@@ -964,57 +998,94 @@ class AutonomousCleaningMissionNode(Node):
             self._on_transition(previous)
             return
         self._publish_combined_velocity(now_s, include_visual=True)
-        aligned = (
-            self._visual_valid
-            and self._visual_aligned
-            and self._distance_reached
-            and self._distance_and_yaw_ready()
-            and self._horizontal_speed() <= self._arrival_max_speed_mps
-        )
-        if self._alignment_window.update(aligned, now_s):
+        if self._alignment_window.update(
+            self._alignment_conditions_ready(), now_s
+        ):
             previous = self._fsm.state
             self._fsm.alignment_complete()
             self._on_transition(previous, preserve_control=True)
 
     def _tick_spray(self, now_s: float) -> None:
         self._publish_combined_velocity(now_s, include_visual=False)
+        if (
+            self._spray_status_time_s is None
+            or now_s - self._spray_status_time_s > self._status_timeout_s
+        ):
+            self._fail('spray status communication timeout', True)
+            return
+        if self._spray_cycle.complete_if_elapsed(
+            now_s,
+            self._spray_duration_s,
+        ):
+            self._post_spray_barrier = self._current_perception_barrier()
+            previous = self._fsm.state
+            self._fsm.spray_complete()
+            self._on_transition(previous, preserve_control=True)
+            return
         if not self._spray_session_enabled:
             self._request_bool(
                 'spray_enable', self._spray_enable_client, True
             )
             return
-        request = Trigger.Request()
-
-        def sprayed(_result) -> None:
-            previous = self._fsm.state
-            self._fsm.spray_complete()
-            self._on_transition(previous, preserve_control=True)
-
+        if self._spray_cycle.trigger_requested:
+            return
         self._request(
             'spray_trigger',
             self._spray_trigger_client,
-            request,
+            Trigger.Request(),
             lambda result: result.success,
-            sprayed,
+            on_success=lambda _result: self._spray_cycle.accept_trigger(
+                time.monotonic()
+            ),
+            on_dispatched=lambda: self._spray_cycle.latch_trigger(now_s),
+            on_failure=lambda message: self._fail(
+                f'spray trigger failed: {message}', True
+            ),
         )
 
-    def _tick_verify(self, now_s: float) -> None:
-        self._publish_combined_velocity(now_s, include_visual=False)
-        if self._verify_started_s is None:
-            self._verify_started_s = now_s
-            self._perception_window.reset()
+    def _tick_post_spray_align(self, now_s: float) -> None:
+        fresh = self._fresh_post_spray_perception(now_s)
+        if self._tick_velocity_control_entry(
+            now_s,
+            require_visual=fresh,
+        ):
             return
-        if now_s - self._verify_started_s < self._verification_settle_s:
+        if self._mode != 'OFFBOARD':
+            self._fail(
+                f'PX4/QGC mode override during post-spray alignment: '
+                f'{self._mode}',
+                False,
+            )
             return
-        if self._clean_packet_fresh(now_s) and not self._panel_visible:
+        if not fresh:
+            self._alignment_window.reset()
+            return
+        if not self._panel_visible:
             previous = self._fsm.state
             self._fsm.target_lost()
             self._on_transition(previous)
             return
-        if not self._fresh_clean_perception(now_s) or not self._panel_visible:
+        self._publish_combined_velocity(now_s, include_visual=True)
+        if not self._alignment_window.update(
+            self._alignment_conditions_ready(), now_s
+        ):
+            return
+        previous = self._fsm.state
+        self._fsm.post_spray_alignment_complete()
+        self._on_transition(previous, preserve_control=True)
+
+    def _tick_verify(self, now_s: float) -> None:
+        fresh = self._fresh_post_spray_perception(now_s)
+        self._publish_combined_velocity(now_s, include_visual=fresh)
+        if not fresh:
             self._perception_window.reset()
             return
-        if not self._distance_and_yaw_ready():
+        if not self._panel_visible:
+            previous = self._fsm.state
+            self._fsm.target_lost()
+            self._on_transition(previous)
+            return
+        if not self._alignment_conditions_ready():
             self._perception_window.reset()
             return
         if not self._perception_window.update(True, now_s):
@@ -1060,11 +1131,12 @@ class AutonomousCleaningMissionNode(Node):
             previous = self._fsm.state
             self._fsm.landed()
             self._on_transition(previous)
-            self._publish_result('COMPLETE')
+            self._publish_mission_summary('COMPLETE')
 
     def _tick_abort(self) -> None:
         self._publish_survey(False)
         self._publish_ai_mode('idle')
+        self._request_spray_stop_once()
         self._request_bool('takeoff_disable', self._takeoff_client, False)
         self._request_bool('distance_disable', self._distance_client, False)
         self._request_bool('spray_disable', self._spray_enable_client, False)
@@ -1245,6 +1317,32 @@ class AutonomousCleaningMissionNode(Node):
             )
         )
 
+    def _fresh_post_spray_perception(self, now_s: float) -> bool:
+        completed_s = self._spray_cycle.pulse_completed_s
+        if (
+            completed_s is None
+            or self._perception is None
+            or self._perception_time_s is None
+            or self._perception_time_s <= completed_s
+            or not self._fresh_clean_perception(now_s)
+        ):
+            return False
+        return perception_is_newer(
+            session_id=str(self._perception.session_id),
+            sequence=int(self._perception.sequence),
+            frame_id=int(self._perception.frame_id),
+            barrier=self._post_spray_barrier,
+        )
+
+    def _current_perception_barrier(self) -> Optional[PerceptionBarrier]:
+        if self._perception is None:
+            return None
+        return PerceptionBarrier(
+            session_id=str(self._perception.session_id),
+            sequence=int(self._perception.sequence),
+            frame_id=int(self._perception.frame_id),
+        )
+
     def _clean_packet_fresh(self, now_s: float) -> bool:
         return bool(
             self._ai_healthy
@@ -1264,6 +1362,15 @@ class AutonomousCleaningMissionNode(Node):
             <= self._lidar_z_tolerance_m
             and abs(wrapped_yaw_error(self._launch_yaw_rad, self._yaw_rad))
             <= self._yaw_tolerance_rad
+        )
+
+    def _alignment_conditions_ready(self) -> bool:
+        return bool(
+            self._visual_valid
+            and self._visual_aligned
+            and self._distance_reached
+            and self._distance_and_yaw_ready()
+            and self._horizontal_speed() <= self._arrival_max_speed_mps
         )
 
     def _panel_targets_from_message(self, message: PanelMap):
@@ -1294,16 +1401,21 @@ class AutonomousCleaningMissionNode(Node):
         self._perception_window.reset()
         self._alignment_window.reset()
         self._arrival.reset()
-        self._verify_started_s = None
+        if state == CleaningMissionState.SPRAY:
+            self._spray_cycle.reset()
+            self._post_spray_barrier = None
         if state == CleaningMissionState.TAKEOFF:
             self._stage = 'ENABLE'
             self._control_kind = 'none'
         elif state in {
             CleaningMissionState.DESCEND,
             CleaningMissionState.PRECISION_ALIGN,
+            CleaningMissionState.POST_SPRAY_ALIGN,
         }:
-            self._stage = 'HANDOVER'
-            if not preserve_control:
+            if preserve_control and self._control_kind == 'velocity':
+                self._stage = 'ACTIVE'
+            else:
+                self._stage = 'HANDOVER'
                 self._control_kind = 'none'
         elif state in self.POSITION_STATES:
             if preserve_control and self._control_kind == 'position':
@@ -1322,6 +1434,7 @@ class AutonomousCleaningMissionNode(Node):
             CleaningMissionState.ASSESS,
             CleaningMissionState.PRECISION_ALIGN,
             CleaningMissionState.SPRAY,
+            CleaningMissionState.POST_SPRAY_ALIGN,
             CleaningMissionState.VERIFY,
         }:
             panel = self._fsm.current_panel
@@ -1338,6 +1451,20 @@ class AutonomousCleaningMissionNode(Node):
         self.get_logger().info(
             f'{previous.name} -> {state.name}: {self._fsm.reason}'
         )
+        if (
+            previous in {
+                CleaningMissionState.ASSESS,
+                CleaningMissionState.VERIFY,
+            }
+            and state in {
+                CleaningMissionState.TRANSIT,
+                CleaningMissionState.RETURN_HOME,
+            }
+            and self._fsm.current_index > 0
+        ):
+            self._publish_panel_result(
+                self._fsm.panels[self._fsm.current_index - 1]
+            )
         self._publish_state()
 
     def _set_stage(self, stage: str) -> None:
@@ -1399,18 +1526,30 @@ class AutonomousCleaningMissionNode(Node):
         request,
         accepted: Callable,
         on_success: Optional[Callable] = None,
-    ) -> None:
+        on_dispatched: Optional[Callable] = None,
+        on_failure: Optional[Callable] = None,
+    ) -> bool:
         now_s = time.monotonic()
         if self._pending_action is not None:
-            return
+            return False
         if now_s - self._last_action_s.get(action, -math.inf) < self._action_retry_s:
-            return
+            return False
         if not client.service_is_ready():
             self._last_action_s[action] = now_s
-            return
+            return False
         self._pending_action = action
         self._last_action_s[action] = now_s
-        future = client.call_async(request)
+        try:
+            future = client.call_async(request)
+        except Exception as exc:  # ROS service dispatch error
+            self._pending_action = None
+            message = str(exc)
+            self.get_logger().error(f'{action} service dispatch failed: {message}')
+            if on_failure is not None:
+                on_failure(message)
+            return False
+        if on_dispatched is not None:
+            on_dispatched()
 
         def completed(result_future) -> None:
             self._pending_action = None
@@ -1418,14 +1557,45 @@ class AutonomousCleaningMissionNode(Node):
                 result = result_future.result()
                 success = bool(accepted(result))
             except Exception as exc:  # ROS service transport error
-                self.get_logger().error(f'{action} service failed: {exc}')
+                message = str(exc)
+                self.get_logger().error(f'{action} service failed: {message}')
+                if on_failure is not None:
+                    on_failure(message)
                 return
             if not success:
                 message = getattr(result, 'message', 'request rejected')
                 self.get_logger().warning(f'{action} rejected: {message}')
+                if on_failure is not None:
+                    on_failure(message)
                 return
             if on_success is not None:
                 on_success(result)
+
+        future.add_done_callback(completed)
+        return True
+
+    def _request_spray_stop_once(self) -> None:
+        """Send PX4 trigger-disable independently of normal action retries."""
+        if self._spray_stop_requested or not self._spray_stop_client.service_is_ready():
+            return
+        try:
+            future = self._spray_stop_client.call_async(Trigger.Request())
+        except Exception as exc:
+            self.get_logger().error(f'spray stop dispatch failed: {exc}')
+            return
+        self._spray_stop_requested = True
+
+        def completed(result_future) -> None:
+            try:
+                result = result_future.result()
+                if not result.success:
+                    self.get_logger().error(
+                        f'spray stop rejected: {result.message}'
+                    )
+                    self._spray_stop_requested = False
+            except Exception as exc:
+                self.get_logger().error(f'spray stop service failed: {exc}')
+                self._spray_stop_requested = False
 
         future.add_done_callback(completed)
 
@@ -1433,9 +1603,10 @@ class AutonomousCleaningMissionNode(Node):
         if self._fsm.state == CleaningMissionState.ABORT:
             return
         self.get_logger().error(reason)
+        self._request_spray_stop_once()
         self._fsm.abort(reason)
         self._abort_land_requested = bool(request_land)
-        self._publish_result('ABORT: ' + reason)
+        self._publish_mission_summary('ABORT', reason)
         self._publish_state()
         self._publish_survey(False)
         self._publish_ai_mode('idle')
@@ -1445,6 +1616,41 @@ class AutonomousCleaningMissionNode(Node):
 
     def _publish_result(self, result: str) -> None:
         self._result_publisher.publish(String(data=result))
+
+    def _panel_result(self, progress) -> dict:
+        return {
+            'panel_id': progress.target.panel_id,
+            'spray_attempts': progress.spray_attempts,
+            'clean': progress.clean,
+            'cleaning_failed': progress.cleaning_failed,
+            'failure_reason': progress.failure_reason,
+        }
+
+    def _publish_panel_result(self, progress) -> None:
+        self._publish_result(json.dumps(
+            {
+                'status': 'PANEL_RESULT',
+                'panel': self._panel_result(progress),
+            },
+            separators=(',', ':'),
+        ))
+
+    def _publish_mission_summary(self, status: str, reason: str = '') -> None:
+        self._publish_result(json.dumps(
+            {
+                'status': status,
+                'reason': reason,
+                'panels_total': len(self._fsm.panels),
+                'panels_clean': sum(panel.clean for panel in self._fsm.panels),
+                'panels_cleaning_failed': sum(
+                    panel.cleaning_failed for panel in self._fsm.panels
+                ),
+                'panels': [
+                    self._panel_result(panel) for panel in self._fsm.panels
+                ],
+            },
+            separators=(',', ':'),
+        ))
 
     def _publish_survey(self, active: bool) -> None:
         self._survey_publisher.publish(Bool(data=active))

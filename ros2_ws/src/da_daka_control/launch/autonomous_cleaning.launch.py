@@ -20,8 +20,6 @@ def generate_launch_description() -> LaunchDescription:
     calibration_approved = LaunchConfiguration('calibration_approved')
     spray_output_enabled = LaunchConfiguration('spray_output_enabled')
     spray_backend = LaunchConfiguration('spray_backend')
-    gpio_chip = LaunchConfiguration('gpio_chip')
-    gpio_line_offset = LaunchConfiguration('gpio_line_offset')
     nozzle_forward_m = LaunchConfiguration('camera_to_nozzle_forward_m')
     nozzle_left_m = LaunchConfiguration('camera_to_nozzle_left_m')
     laptop_ip = LaunchConfiguration('laptop_ip')
@@ -33,8 +31,6 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument('calibration_approved', default_value='false'),
             DeclareLaunchArgument('spray_output_enabled', default_value='false'),
             DeclareLaunchArgument('spray_backend', default_value='mock'),
-            DeclareLaunchArgument('gpio_chip', default_value=''),
-            DeclareLaunchArgument('gpio_line_offset', default_value='-1'),
             DeclareLaunchArgument(
                 'camera_to_nozzle_forward_m', default_value='0.0'
             ),
@@ -153,10 +149,6 @@ def generate_launch_description() -> LaunchDescription:
                         'backend': spray_backend,
                         'output_enabled': ParameterValue(
                             spray_output_enabled, value_type=bool
-                        ),
-                        'gpio_chip': gpio_chip,
-                        'gpio_line_offset': ParameterValue(
-                            gpio_line_offset, value_type=int
                         ),
                     },
                 ],

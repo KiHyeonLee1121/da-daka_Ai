@@ -63,7 +63,7 @@ def create_spray_controller(
     if backend == "gpio":
         raise RuntimeError(
             "Legacy Python GPIO spray is blocked. Use the ROS 2 "
-            "spray_controller GpioValveBackend with explicit output gates."
+            "ROS spray_controller with explicit output gates."
         )
     if backend == "mavlink":
         return MAVLinkSprayController(spray_config, mavlink)

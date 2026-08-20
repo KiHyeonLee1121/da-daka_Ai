@@ -16,11 +16,14 @@ Raspberry Pi 5가 QGroundControl(QGC)을 거치지 않고 PX4의 ARM, OFFBOARD �
 - Pi가 비행 제어권을 소유하며 노트북은 MAVROS setpoint, ARM, 비행 모드를
   제어할 수 없다.
 - 소프트웨어 CI 통과는 실기체 비행 검증 완료를 뜻하지 않는다. 학습 모델,
-  실측 보정값, GPIO 회로, 실제 장치 경로, 네트워크/GPU 환경과 단계별 현장
+  실측 보정값, Pixhawk/DRV8876 회로, 실제 장치 경로, 네트워크/GPU 환경과 단계별 현장
   시험은 별도로 완료해야 한다.
 - `configuration_approved`, `calibration_approved`, 실제 분사 출력의 기본값은
   모두 닫혀 있다. 필요한 확인을 끝내기 전에는 미션 시작 또는 실제 분사가
   거부된다.
+- ROS 2 `spray_controller`의 live backend는 MAVROS를 통해 Pixhawk 4의
+  `Camera_Trigger` one-shot을 요청한다. 실제 출력은 AUX5가 DRV8876
+  `EN/IN1`을 구동하며 Raspberry Pi GPIO는 사용하지 않는다.
 
 ## 최종 임무
 
@@ -29,9 +32,12 @@ PRECHECK -> ARMING -> TAKEOFF(3 m)
 -> SURVEY -> PLAN_ROUTE -> DESCEND(분사 거리)
 -> TRANSIT -> SLOW_APPROACH -> REACQUIRE -> ASSESS
    ├─ clean -> 다음 패널
-   └─ dirty -> PRECISION_ALIGN -> SPRAY -> VERIFY
-                 ├─ dirty -> PRECISION_ALIGN 후 재분사
-                 └─ clean -> 다음 패널
+   └─ dirty -> PRECISION_ALIGN -> SPRAY(3초)
+                 -> trigger 성공 후 3초 타이머 완료
+                 -> POST_SPRAY_ALIGN -> VERIFY(분사 종료 후 새 frame)
+                    ├─ clean -> 다음 패널
+                    ├─ dirty + attempts < 3 -> PRECISION_ALIGN
+                    └─ dirty + attempts == 3 -> cleaning_failed, 다음 패널
 -> RETURN_HOME -> AUTO.LAND -> COMPLETE
 ```
 
@@ -44,8 +50,11 @@ PRECHECK -> ARMING -> TAKEOFF(3 m)
    들어오면 즉시 접근 속도를 제한한다.
 5. 목표 패널을 다시 확인하고 깨끗하면 건너뛴다. 오염됐다면 LiDAR 거리,
    이륙 yaw, 영상 중심과 카메라-노즐 오프셋을 함께 사용해 분사점을 맞춘다.
-6. 분사 후 새 추론 결과로 오염을 재검증한다. 오염이 남으면 설정된 최대 횟수
-   안에서 재정렬과 분사를 반복한다.
+6. 분사 trigger가 성공하면 3초 타이머가 끝날 때까지 `SPRAY`를 유지한다. 타이머
+   완료 즉시 노즐·거리·yaw를 다시 정렬하고, 완료 뒤 수신한 새 frame/sequence로만
+   오염을 재검증한다. 별도의 밸브 폐쇄 피드백은 기다리지 않는다.
+   세 번 분사 후에도 오염이면 해당 패널에 `cleaning_failed=true`를 남기고
+   다음 패널로 이동한다.
 7. 모든 패널 처리가 끝나면 저장한 이륙 ENU 좌표로 복귀하고 `AUTO.LAND`로
    착륙한다.
 
@@ -65,15 +74,16 @@ flowchart TB
     Receiver --> Mission
     Mission -->|"position/velocity setpoint"| MAVROS
     MAVROS --> PX4
-    Mission --> Spray["GPIO 분사 제어"]
+    Mission --> Spray["MAVROS Camera Trigger"]
+    Spray -->|"AUX5 3초"| Driver["DRV8876 + 솔레노이드"]
     Mission -->|"모드/패널 UDP 5006"| Laptop
 ```
 
 | 주체 | 소유하는 기능 | 소유하지 않는 기능 |
 |---|---|---|
 | Raspberry Pi 5 | 카메라 송신, LiDAR, 패널 지도/경로, 미션 FSM, MAVROS setpoint, ARM/OFFBOARD, 분사, 복귀/착륙 | CUDA 추론 |
-| NVIDIA 노트북 | 패널 검출, ONNX 오염 segmentation, 결과/heartbeat 송신 | 비행 명령, GPIO, 미션 순서 |
-| PX4/Pixhawk | 자세 안정화, 모터 출력, 비행 모드와 failsafe 실행 | 패널 인식과 청소 순서 판단 |
+| NVIDIA 노트북 | 패널 검출, ONNX 오염 segmentation, 결과/heartbeat 송신 | 비행 명령, 분사 출력, 미션 순서 |
+| PX4/Pixhawk | 자세 안정화, 모터 출력, 비행 모드/failsafe, AUX5 3초 one-shot | 패널 인식과 청소 순서 판단 |
 | QGC/조종자 | 선택적 감시, 비상 Hold/Land 또는 수동 개입 | 정상 자율 임무의 지속적인 명령 |
 
 여러 ROS 노드는 하나의 launch로 실행되지만 MAVROS position/velocity setpoint는
@@ -89,6 +99,7 @@ flowchart TB
 | `ros2_ws/src/da_daka_interfaces` | ROS 2 사용자 정의 메시지 |
 | `laptop_ai` | CUDA 전용 ONNX 추론 worker와 성능 측정 도구 |
 | `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
+| `docs/real_vehicle_cleaning_acceptance.md` | Pi 설치 후 실기체 전기·분사·비행 합격 체크리스트 |
 | `docs/edge_gpu_offload_runbook.md` | Pi–노트북 GPU offload 연결, 안전 점검과 2026-08-16 현장 검증 결과 |
 | `docs/field_diagnostics.md` | 좌표 투영과 카메라 진단 절차 |
 | `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
@@ -134,7 +145,7 @@ Pi 저장소에 커밋하지 않은 파일이나 별도 변경이 있으면 그 
 - 필요할 경우 Pixhawk serial을 분기하는 `mavlink-router`
 - `rpicam-vid`를 사용할 수 있는 카메라 환경
 - TF-Luna serial 접근 권한
-- 실제 분사 시 libgpiod와 GPIO 접근 권한
+- 실제 분사 시 MAVROS `/mavros/cmd/command`와 PX4 Camera Trigger 설정
 - 노트북과 통신할 전용 현장 네트워크
 
 최종 launch는 MAVROS나 `mavlink-router` 자체를 시작하지 않는다. 먼저 현장
@@ -222,7 +233,7 @@ IP/source ID, session, 증가하는 sequence/frame, timestamp, 값 범위와 tim
 ## 설정과 기동
 
 저장소의 숫자는 안전한 기본값 또는 예시일 뿐이다. 아래 `직접 해야 할 작업`을
-끝내기 전에는 승인값을 `true`로 바꾸거나 실제 GPIO 출력을 켜지 않는다.
+끝내기 전에는 승인값을 `true`로 바꾸거나 실제 AUX5 출력을 켜지 않는다.
 
 ### 1. 노트북 AI
 
@@ -271,10 +282,8 @@ ros2 launch da_daka_control autonomous_cleaning.launch.py \
   video_stream_enabled:=true \
   configuration_approved:=true \
   calibration_approved:=true \
-  spray_backend:=gpio \
+  spray_backend:=pixhawk \
   spray_output_enabled:=true \
-  gpio_chip:=<GPIO_CHIP_PATH> \
-  gpio_line_offset:=<GPIO_LINE_OFFSET> \
   camera_to_nozzle_forward_m:=<MEASURED_FORWARD_M> \
   camera_to_nozzle_left_m:=<MEASURED_LEFT_M>
 ```
@@ -323,7 +332,7 @@ footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서�
 | 프레임 안전 여유 | 노즐 목표점을 맞췄을 때 패널이 프레임 밖으로 나가지 않고 주변 구조물에 분사하지 않는지 `safe_frame_margin_norm`을 검증한다. |
 
 실측 수평 오프셋은 launch의 `camera_to_nozzle_forward_m`와
-`camera_to_nozzle_left_m`에 넣는다. 물을 쓰는 시험은 GPIO/배선 bench test와
+`camera_to_nozzle_left_m`에 넣는다. 물을 쓰는 시험은 AUX5/배선 bench test와
 정렬 dry-run을 통과한 뒤 프로펠러를 제거한 상태에서 먼저 수행한다.
 
 ### C. TF-Luna와 높이 기준
@@ -354,15 +363,16 @@ footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서�
 센서 캘리브레이션, 프로펠러/모터 방향, 기체 중심, home/local origin과 배터리
 상태가 정상이 아니면 approval gate를 열지 않는다.
 
-### E. 실제 GPIO와 분사 구동회로
+### E. Pixhawk AUX5와 분사 구동회로
 
 | 해야 할 일 | 기준 |
 |---|---|
-| GPIO chip/line | Pi 5의 실제 `gpioinfo` 결과와 배선도를 대조해 chip path와 line offset을 확정한다. 물리 핀 번호, BCM 이름, line offset을 혼동하지 않는다. |
-| 출력 극성 | 밸브가 active-high인지 active-low인지 측정하고 전원 인가/부팅/프로세스 종료 때 기본 OFF인지 확인한다. |
-| 구동회로 | 펌프/솔레노이드를 Pi GPIO에서 직접 구동하지 않는다. 정격에 맞는 MOSFET/relay driver, 별도 actuator 전원, 공통 기준 접지와 유도성 부하 보호를 갖춘다. |
-| 펄스 설정 | 실제 유량으로 `pulse_duration_s`, 최소/최대 pulse, cooldown, session당 최대 횟수를 정한다. |
-| 고장 시험 | 프로세스 강제 종료, Pi 재부팅, 케이블 분리, 네트워크 단절, abort 때 밸브가 OFF로 남는지 확인한다. |
+| 실제 신호 경로 | `Pi/ROS 2 -> MAVROS -> Pixhawk 4 AUX5(FMU 물리 핀 6) -> DRV8876 EN/IN1 -> 솔레노이드`인지 배선과 코드를 함께 확인한다. |
+| PX4 설정 | AUX5 output function은 `Camera_Trigger`, `TRIG_INTERFACE=1`, `TRIG_MODE=1`, `TRIG_POLARITY=1`, `TRIG_ACT_TIME=3000 ms`로 설정하고 사용 중인 PX4 버전에서 파라미터를 재확인한다. |
+| 출력 극성 | AUX5가 대기 시 약 0 V, one-shot 시 약 3.3 V인지 솔레노이드를 분리한 상태에서 측정한다. |
+| 구동회로 | PM07 B+/GND가 DRV8876 전원을 공급하고 Pixhawk/DRV8876가 공통 GND를 공유하는지, SLEEP/PMODE/PH/VREF 배선이 인수인계 배선도와 일치하는지 확인한다. |
+| 펄스 설정 | PX4 `TRIG_ACT_TIME=3000 ms`와 ROS `pulse_duration_s=3.0`을 일치시킨다. 고정 session 횟수 제한은 없고 FSM이 최초 1회와 재시도 2회, 패널당 최대 3회로 제한한다. |
+| stop 한계 | stock PX4의 Camera Trigger one-shot은 시작 뒤 `DO_TRIGGER_CONTROL(false)`로 조기 종료되지 않는다. ABORT/노드 종료/통신 단절 중에도 현재 펄스는 최대 3초까지 유지될 수 있으므로 독립적인 즉시 차단이 필요하면 전원 interlock 또는 PX4 펌웨어 변경을 별도로 구현한다. |
 
 처음에는 `backend: mock`, `output_enabled: false`로 ROS 상태만 검증한다. 다음은
 프로펠러와 액체를 제거한 전기 시험, 그 다음은 프로펠러를 제거하고 물을 사용한
@@ -411,7 +421,7 @@ footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서�
 
 | Gate | 기본값 | `true` 또는 실제 출력 허용 조건 |
 |---|---:|---|
-| `configuration_approved` | `false` | 실제 IP/port, serial, MAVROS/PX4, GPIO, 비행구역과 경로 안전 설정 검토 완료 |
+| `configuration_approved` | `false` | 실제 IP/port, serial, MAVROS/PX4, AUX5/DRV8876, 비행구역과 경로 안전 설정 검토 완료 |
 | `calibration_approved` | `false` | 카메라 footprint/자세/위치, 영상 축, 노즐 오프셋, LiDAR 거리의 반복 측정과 투영·정렬 시험 통과 |
 | `spray_output_enabled` | `false` | 구동회로, polarity, OFF 기본상태, pulse/cooldown, abort/전원 고장 시험 통과 |
 | `require_live_spray` | `true` | 운영 mission에서는 유지한다. 실제 분사 output이 없으면 PRECHECK가 실패해야 한다. |
@@ -429,10 +439,11 @@ footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서�
    다중 패널 오선택을 검증한다.
 3. **ROS dry-run** — mock 분사로 노드, 토픽, 서비스, mode heartbeat와 상태
    전이를 확인한다. ARM 서비스는 호출하지 않는다.
-4. **GPIO bench** — 프로펠러/액체 제거 상태에서 line, polarity, pulse, cooldown,
-   강제 종료 OFF를 계측한다.
-5. **PX4 SITL** — 전체 임무, AI/LiDAR/MAVROS 단절, OFFBOARD 해제, abort,
-   재분사 제한과 원점 착륙을 시험한다.
+4. **분사 출력 bench** — 프로펠러/액체 제거 상태에서 실제 actuator 출력 경로의
+   polarity, 3초 pulse와 stop/abort/강제 종료 OFF를 계측한다.
+5. **PX4 SITL** — 1차·2차·3차 성공, 3차 실패 후 다음 패널 이동, 마지막 패널
+   실패 후에도 원점 복귀·착륙, AI/LiDAR/MAVROS 단절, OFFBOARD 해제와 abort를
+   시험한다.
 6. **계류 이륙/측량** — 안전하게 계류하고 이륙, 3 m 유지, yaw, 패널 지도만
    확인한다. 분사 출력은 끈다.
 7. **무수분 저고도 이동/정렬** — 물 없이 단일 패널 접근, 프레임 감속, 거리,
@@ -470,12 +481,14 @@ PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
   ros2_ws/src/da_daka_control/test/test_perception_protocol.py \
   ros2_ws/src/da_daka_control/test/test_route_planner.py \
   ros2_ws/src/da_daka_control/test/test_spray_actuator.py \
+  ros2_ws/src/da_daka_control/test/test_spray_sequence.py \
   ros2_ws/src/da_daka_control/test/test_video_streamer.py
 ```
 
 ## 관련 문서
 
 - [최종 자율 청소 구조](docs/autonomous_cleaning_architecture.md)
+- [3초 분사 시퀀스 시험 절차](docs/spray_sequence_test_procedure.md)
 - [현장 좌표·카메라 진단](docs/field_diagnostics.md)
 - [브랜치 통합 감사 기록](docs/branch_consolidation.md)
 - [노트북 AI worker](laptop_ai/README.md)

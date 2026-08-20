@@ -9,7 +9,7 @@ is verified.
 | `agent/harden-distance-flight-safety` (`4d74a8e`) | Already an ancestor of the original `main`; retained in the current distance/mission safety code. |
 | `agent/jazzy-tf-luna-support` (`2dc2783`) | Already an ancestor; TF-Luna serial, filtering and ROS Jazzy support remain in the final launch. |
 | `codex/rpi-ros2-distance-control` (`8ea1f64`) | Already an ancestor; internal distance command topic and single MAVROS setpoint owner are retained. |
-| `agent/real-spray-controller` (`7e240bd`) | Replaced by `spray_actuator.py` and `spray_controller_node.py`: mock/GPIO backends, fail-closed output gate, pulse/cooldown/count limits and emergency stop. |
+| `agent/real-spray-controller` (`7e240bd`) | Replaced by `spray_actuator.py` and `spray_controller_node.py`: mock/Pixhawk backends, MAVROS Camera Trigger one-shot, output gate and pulse/cooldown guards. |
 | `agent/grid-prior-ai-demo` (`f6f79d8`) | Useful spray safeguards were retained. Its fixed five-panel coordinates and grid-order assumptions were deliberately replaced by metric multi-frame mapping and dynamic routing because the final panels are random. |
 | `codex/laptop-ai-inference` (`f7c38b0`) | CUDA-only ONNX execution, runtime tuning, GPU preflight, FP16 conversion and benchmarking were adapted to the production binary-segmentation protocol-v2 worker. |
 | `codex/pendulum-joint-optimization-review` (`520514c`) | Joint scheduler validation, Pareto selection, hysteresis, scene-change tests and observe/apply boundary documentation were retained. |
@@ -31,7 +31,7 @@ is verified.
 ## Deliberately external deployment inputs
 
 The following cannot be safely generated from source code: trained ONNX weights,
-measured camera footprint/mounting transform, camera-to-nozzle offsets, GPIO
+measured camera footprint/mounting transform, camera-to-nozzle offsets, Pixhawk AUX5/DRV8876
 wiring/polarity, measured network/GPU optimizer profiles, and SITL/real-flight
 acceptance evidence. Checked-in approvals and live-output gates remain false until
 those artifacts are supplied and verified.

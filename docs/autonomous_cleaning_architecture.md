@@ -16,10 +16,11 @@
 | 오염되지 않은 패널 건너뛰기 | `ASSESS -> TRANSIT/RETURN_HOME` |
 | 거리·헤딩·분사점 동시 정렬 | LiDAR Z/yaw hold + nozzle-aware visual servo |
 | 카메라–노즐 위치차 | 실측 FLU 오프셋을 고도별 영상 목표점으로 변환 |
-| 실제 밸브 분사 | mock/GPIO 이중 backend와 enable/pulse/cooldown/count 잠금 |
-| 분사 후 재검증 | `SPRAY -> VERIFY` 강제 순서 |
-| 오염 지속 시 재분사 | `VERIFY -> PRECISION_ALIGN -> SPRAY`, 최대 횟수 후 중단 |
-| 다음 패널 반복 | 패널별 `clean`, `spray_attempts`, 현재 index 관리 |
+| 실제 밸브 분사 | mock/Pixhawk backend, MAVROS one-shot과 enable/3초 pulse/cooldown 잠금 |
+| 분사 완료 판정 | trigger 성공 후 3초 타이머 경과, 별도 폐쇄 피드백 대기 없음 |
+| 분사 후 재검증 | `SPRAY -> POST_SPRAY_ALIGN -> VERIFY` 강제 순서와 fresh frame barrier |
+| 오염 지속 시 재분사 | 최초 1회 + 재시도 2회로 패널당 최대 3회, 3회 실패는 `cleaning_failed` 기록 후 다음 패널 |
+| 다음 패널 반복 | 패널별 `clean`, `cleaning_failed`, `failure_reason`, `spray_attempts` 관리 |
 | 원점 복귀·착륙 | 저장한 launch ENU로 복귀 후 `AUTO.LAND` |
 | Pi 영상 송신 | `rpicam-vid` low-latency MPEG-TS/UDP supervisor |
 | 노트북 GPU 추론 | CUDAExecutionProvider 전용 ONNX segmentation worker |
@@ -35,11 +36,22 @@ PRECHECK -> ARMING -> TAKEOFF(3 m)
 -> SURVEY -> PLAN_ROUTE -> DESCEND(분사 거리)
 -> TRANSIT -> SLOW_APPROACH -> REACQUIRE -> ASSESS
    ├─ clean -> 다음 패널
-   └─ dirty -> PRECISION_ALIGN -> SPRAY -> VERIFY
-                 ├─ dirty -> PRECISION_ALIGN 재시도
-                 └─ clean -> 다음 패널
+   └─ dirty -> PRECISION_ALIGN -> SPRAY(3초)
+                 -> wait 3 s timer -> POST_SPRAY_ALIGN -> VERIFY
+                    ├─ clean -> 다음 패널
+                    ├─ dirty + attempts < 3 -> PRECISION_ALIGN
+                    └─ dirty + attempts == 3 -> cleaning_failed, 다음 패널
 -> RETURN_HOME -> AUTO.LAND -> COMPLETE
 ```
+
+`/spray/trigger` 성공은 펄스 시작 승인이다. 미션은 trigger를 한 번만 latch하고
+성공 응답 뒤 3초가 경과할 때 분사 횟수를 올린다. 별도의 밸브 폐쇄 피드백은
+기다리지 않는다. 실제 live 경로는 `MAV_CMD_DO_DIGICAM_CONTROL(203, param5=1)`
+one-shot이며 PX4의 `TRIG_ACT_TIME=3000 ms`가 AUX5를 자동 비활성화한다. 고정
+session 분사 횟수나 물 용량 기반 패널 제한은 없다. 전체 분사는 유한한 측량
+경로와 패널당 세 번 제한으로 경계된다. 3초 타이머 완료 때 기록한
+session/frame/sequence 이후 perception만 post-spray 정렬과
+청결 판정에 사용한다.
 
 QGC는 이 순서의 명령자가 아니다. Pi의
 `autonomous_cleaning_mission_node`가 ARM, OFFBOARD 전환, position/velocity
@@ -101,17 +113,15 @@ ros2 launch da_daka_control autonomous_cleaning.launch.py \
   video_stream_enabled:=true \
   configuration_approved:=true \
   calibration_approved:=true \
-  spray_backend:=gpio \
+  spray_backend:=pixhawk \
   spray_output_enabled:=true \
-  gpio_chip:=/dev/gpiochip0 \
-  gpio_line_offset:=17 \
   camera_to_nozzle_forward_m:=0.12 \
   camera_to_nozzle_left_m:=-0.03
 
 ros2 service call /autonomous_cleaning/start std_srvs/srv/Trigger "{}"
 ```
 
-위 GPIO와 오프셋 숫자는 예시다. 실제 측정 없이 그대로 사용하면 안 된다.
+위 오프셋 숫자는 예시다. 실제 측정 없이 그대로 사용하면 안 된다.
 
 ## 코드가 대신 만들 수 없는 필수 입력
 
@@ -121,7 +131,7 @@ ros2 service call /autonomous_cleaning/start std_srvs/srv/Trigger "{}"
 1. 학습·검증된 `dirt_segmentation.onnx`
 2. 장착 상태에서 1 m 기준 카메라 가로·세로 지면 화각
 3. 카메라 광학 중심에서 노즐까지의 body FLU 실측 오프셋
-4. 실제 Pi GPIO chip/line, active polarity와 밸브 구동회로
+4. Pixhawk AUX5 Camera Trigger 설정, active polarity와 DRV8876 구동회로
 5. GTX 모델별 CUDA/ONNX Runtime 지연과 네트워크 지연 측정
 6. 실제 패널 간 이동고도에서 장애물·프로펠러·분사 안전거리 검증
 
@@ -136,13 +146,20 @@ ros2 service call /autonomous_cleaning/start std_srvs/srv/Trigger "{}"
 
 1. 순수 FSM·좌표 투영·경로·노즐 오프셋 단위 테스트
 2. 녹화 영상으로 laptop worker와 UDP freshness 재생시험
-3. ROS topic/service dry run, mock valve
-4. 프로펠러 제거 GPIO 펄스 시험
-5. PX4 SITL에서 전체 미션과 AI 끊김·LiDAR 끊김·QGC override 시험
+3. ROS topic/service dry run, mock pulse
+4. 프로펠러·솔레노이드 제거 상태의 Pixhawk AUX5 3초 펄스 계측
+5. PX4 SITL에서 1차/2차/3차 성공, 3차 실패 계속 진행, 마지막 실패 후 정상 착륙과
+   AI 끊김·LiDAR 끊김·QGC override 시험
 6. 계류 비행: 이륙/측량만
 7. 물 없는 저고도 이동/정렬
 8. 단일 패널 1회 분사
 9. 복수 랜덤 패널 전체 미션
+
+stock PX4 Camera Trigger one-shot은 시작 뒤 trigger-disable 명령으로 조기
+종료되지 않는다. `/spray/stop`은 disable 명령을 보내지만 진행 중인 펄스는
+`TRIG_ACT_TIME`까지 유지될 수 있다. 즉시 OFF가 필수라면 현재 배선에 독립 전원
+interlock을 추가하거나 PX4 camera-trigger 펌웨어에 one-shot cancel을 구현해야
+한다.
 
 SITL과 실기체 시험을 통과하기 전에는 이 코드가 비행 검증 완료 상태라는 뜻이
 아니다.

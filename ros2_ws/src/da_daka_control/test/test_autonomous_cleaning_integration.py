@@ -47,9 +47,11 @@ def test_random_route_clean_skip_retry_and_home_sequence():
     fsm.cleanliness_result(True)
     fsm.alignment_complete()
     fsm.spray_complete()
+    fsm.post_spray_alignment_complete()
     fsm.cleanliness_result(True)
     fsm.alignment_complete()
     fsm.spray_complete()
+    fsm.post_spray_alignment_complete()
     fsm.cleanliness_result(False)
     assert fsm.panels[1].clean
     assert fsm.panels[1].spray_attempts == 2

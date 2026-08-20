@@ -23,6 +23,7 @@ class CleaningMissionState(Enum):
     ASSESS = auto()
     PRECISION_ALIGN = auto()
     SPRAY = auto()
+    POST_SPRAY_ALIGN = auto()
     VERIFY = auto()
     RETURN_HOME = auto()
     LAND = auto()
@@ -37,6 +38,9 @@ class PanelProgress:
     target: PanelTarget
     spray_attempts: int = 0
     clean: bool = False
+    cleaning_failed: bool = False
+    failure_reason: str = ''
+    awaiting_verification: bool = False
 
 
 @dataclass
@@ -50,8 +54,8 @@ class AutonomousCleaningFsm:
     current_index: int = 0
 
     def __post_init__(self) -> None:
-        if self.max_spray_attempts <= 0:
-            raise ValueError('max_spray_attempts must be positive')
+        if self.max_spray_attempts != 3:
+            raise ValueError('max_spray_attempts must be exactly 3')
 
     @property
     def active(self) -> bool:
@@ -144,7 +148,14 @@ class AutonomousCleaningFsm:
     def panel_reacquired(self) -> None:
         """Begin the initial clean/dirty assessment."""
         self._require(CleaningMissionState.REACQUIRE)
-        self.transition(CleaningMissionState.ASSESS)
+        panel = self._require_current_panel()
+        if panel.awaiting_verification:
+            self.transition(
+                CleaningMissionState.POST_SPRAY_ALIGN,
+                'reacquired panel requires post-spray alignment',
+            )
+        else:
+            self.transition(CleaningMissionState.ASSESS)
 
     def cleanliness_result(self, dirt_found: bool) -> None:
         """Skip a clean panel or request alignment for a dirty panel."""
@@ -153,17 +164,20 @@ class AutonomousCleaningFsm:
             CleaningMissionState.VERIFY,
         }:
             raise RuntimeError('cleanliness result is not currently expected')
+        panel = self._require_current_panel()
+        if self.state == CleaningMissionState.VERIFY:
+            panel.awaiting_verification = False
         if not dirt_found:
-            panel = self._require_current_panel()
             panel.clean = True
             self._advance_panel()
             return
-        panel = self._require_current_panel()
         if panel.spray_attempts >= self.max_spray_attempts:
-            self.abort(
+            panel.cleaning_failed = True
+            panel.failure_reason = (
                 f'panel {panel.target.panel_id} remained dirty after '
                 f'{panel.spray_attempts} sprays'
             )
+            self._advance_panel()
             return
         self.transition(
             CleaningMissionState.PRECISION_ALIGN,
@@ -176,10 +190,19 @@ class AutonomousCleaningFsm:
         self.transition(CleaningMissionState.SPRAY)
 
     def spray_complete(self) -> None:
-        """Count one completed pulse and force post-spray verification."""
+        """Count one elapsed pulse and require immediate realignment."""
         self._require(CleaningMissionState.SPRAY)
         panel = self._require_current_panel()
         panel.spray_attempts += 1
+        panel.awaiting_verification = True
+        self.transition(
+            CleaningMissionState.POST_SPRAY_ALIGN,
+            'three-second pulse elapsed; realign before fresh verification',
+        )
+
+    def post_spray_alignment_complete(self) -> None:
+        """Permit verification after fresh-data precision alignment."""
+        self._require(CleaningMissionState.POST_SPRAY_ALIGN)
         self.transition(CleaningMissionState.VERIFY)
 
     def target_lost(self) -> None:
@@ -188,6 +211,7 @@ class AutonomousCleaningFsm:
             CleaningMissionState.SLOW_APPROACH,
             CleaningMissionState.ASSESS,
             CleaningMissionState.PRECISION_ALIGN,
+            CleaningMissionState.POST_SPRAY_ALIGN,
             CleaningMissionState.VERIFY,
         }:
             raise RuntimeError('target loss is invalid in the current state')
