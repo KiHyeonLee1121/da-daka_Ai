@@ -1,4 +1,5 @@
-"""Publish a bounded vertical feedforward estimate for spray reaction.
+"""
+Publish a bounded vertical feedforward estimate for spray reaction.
 
 The node never publishes a MAVROS setpoint. It consumes the spray controller's
 configured-duration activity estimate and publishes an offset that the distance
