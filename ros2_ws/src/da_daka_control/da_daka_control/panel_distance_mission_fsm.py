@@ -3,6 +3,7 @@
 from collections import deque
 from enum import auto, Enum
 import math
+import statistics
 from typing import Deque, Optional
 
 from da_daka_control.panel_mission_fsm import (  # noqa: F401 (re-exported)
@@ -134,6 +135,112 @@ def wrapped_yaw_error(target_rad: float, current_rad: float) -> float:
     if not math.isfinite(target_rad) or not math.isfinite(current_rad):
         raise ValueError('yaw angles must be finite')
     return (target_rad - current_rad + math.pi) % (2.0 * math.pi) - math.pi
+
+
+class TimeWindowMedian:
+    """Median-filter finite samples over a recent monotonic-time window."""
+
+    def __init__(self, duration_s: float) -> None:
+        if not math.isfinite(duration_s) or duration_s <= 0.0:
+            raise ValueError('median window duration must be positive')
+        self.duration_s = duration_s
+        self._samples: Deque[tuple[float, float]] = deque()
+        self._started_s: Optional[float] = None
+
+    def reset(self) -> None:
+        """Discard all samples and window coverage."""
+        self._samples.clear()
+        self._started_s = None
+
+    def update(self, value: float, now_s: float) -> None:
+        """Add one finite sample at a nondecreasing timestamp."""
+        if not math.isfinite(value) or not math.isfinite(now_s):
+            raise ValueError('median samples must be finite')
+        if self._samples and now_s < self._samples[-1][0]:
+            raise ValueError('median sample time cannot move backwards')
+        if (
+            self._samples
+            and now_s - self._samples[-1][0] > self.duration_s
+        ):
+            self.reset()
+        if self._started_s is None:
+            self._started_s = now_s
+        self._samples.append((now_s, value))
+        self._prune(now_s)
+
+    def value(self, now_s: float) -> Optional[float]:
+        """Return a median only after a complete, fresh window exists."""
+        if not math.isfinite(now_s):
+            raise ValueError('median query time must be finite')
+        self._prune(now_s)
+        if (
+            self._started_s is None
+            or now_s - self._started_s < self.duration_s
+            or not self._samples
+            or now_s - self._samples[-1][0] > self.duration_s
+        ):
+            return None
+        return float(statistics.median(value for _, value in self._samples))
+
+    def _prune(self, now_s: float) -> None:
+        cutoff_s = now_s - self.duration_s
+        while self._samples and self._samples[0][0] < cutoff_s:
+            self._samples.popleft()
+        if not self._samples:
+            self._started_s = None
+
+
+def horizontal_estimator_failures(
+    *,
+    now_s: float,
+    timeout_s: float,
+    estimator_time_s: Optional[float],
+    attitude_valid: Optional[bool],
+    horizontal_velocity_valid: Optional[bool],
+    horizontal_relative_position_valid: Optional[bool],
+    horizontal_absolute_position_valid: Optional[bool],
+    constant_position_mode: Optional[bool],
+    allow_constant_position_mode: bool = False,
+) -> list[str]:
+    """Return PX4 estimator failures that make Local-XY flight unsafe."""
+    if timeout_s <= 0.0:
+        raise ValueError('estimator timeout must be positive')
+    if not math.isfinite(now_s) or not math.isfinite(timeout_s):
+        raise ValueError('estimator time values must be finite')
+    if estimator_time_s is None or now_s - estimator_time_s > timeout_s:
+        return ['PX4 estimator status unavailable or stale']
+    failures = []
+    if attitude_valid is not True:
+        failures.append('PX4 attitude estimate is invalid')
+    if horizontal_velocity_valid is not True:
+        failures.append('PX4 horizontal velocity estimate is invalid')
+    if not (
+        horizontal_relative_position_valid is True
+        or horizontal_absolute_position_valid is True
+    ):
+        failures.append('PX4 horizontal position estimate is invalid')
+    if constant_position_mode is True and not allow_constant_position_mode:
+        failures.append('PX4 estimator is in constant-position mode')
+    return failures
+
+
+def early_takeoff_constant_position_allowed(
+    *,
+    landed_on_ground: bool,
+    offboard_takeoff_state: bool,
+    state_elapsed_s: float,
+    airborne_grace_s: float,
+) -> bool:
+    """Allow only PX4's bounded constant-position transition at takeoff."""
+    if not math.isfinite(state_elapsed_s) or not math.isfinite(
+        airborne_grace_s
+    ):
+        raise ValueError('takeoff const-pos timing must be finite')
+    if state_elapsed_s < 0.0 or airborne_grace_s <= 0.0:
+        raise ValueError('takeoff const-pos timing is outside safe bounds')
+    return landed_on_ground or (
+        offboard_takeoff_state and state_elapsed_s <= airborne_grace_s
+    )
 
 
 class StableYawReference:

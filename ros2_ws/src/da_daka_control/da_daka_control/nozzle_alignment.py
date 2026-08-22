@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 import math
 
-from da_daka_control.panel_mapping import CameraGroundModel
+from da_daka_control.panel_mapping import body_offset_to_enu, CameraGroundModel
 
 
 @dataclass(frozen=True)
@@ -13,6 +13,34 @@ class NozzleImageTarget:
     x_norm: float
     y_norm: float
     inside_safe_frame: bool
+
+
+def quaternion_yaw_rad(
+    x: float,
+    y: float,
+    z: float,
+    w: float,
+) -> float:
+    """Return ENU yaw from a finite, non-zero quaternion."""
+    if not all(math.isfinite(value) for value in (x, y, z, w)):
+        raise ValueError('attitude quaternion must be finite')
+    norm = math.sqrt(x * x + y * y + z * z + w * w)
+    if norm <= 1e-9:
+        raise ValueError('attitude quaternion norm is zero')
+    x, y, z, w = x / norm, y / norm, z / norm, w / norm
+    return math.atan2(
+        2.0 * (w * z + x * y),
+        1.0 - 2.0 * (y * y + z * z),
+    )
+
+
+def body_velocity_to_enu(
+    forward_mps: float,
+    left_mps: float,
+    yaw_rad: float,
+) -> tuple[float, float]:
+    """Rotate a body-FLU visual correction into MAVROS local ENU."""
+    return body_offset_to_enu(forward_mps, left_mps, yaw_rad)
 
 
 def nozzle_image_target(
@@ -59,10 +87,10 @@ def compute_image_velocity(
     maximum_speed_mps: float,
     x_velocity_axis: str = 'y',
     y_velocity_axis: str = 'x',
-    invert_x: bool = False,
+    invert_x: bool = True,
     invert_y: bool = True,
 ) -> tuple[float, float, bool]:
-    """Return body/controller X/Y corrections toward the nozzle target."""
+    """Return body-FLU forward/left corrections toward the nozzle target."""
     values = (
         observed_x_norm,
         observed_y_norm,

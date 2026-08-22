@@ -1,0 +1,6 @@
+video_streamer:
+  ros__parameters:
+    # 2026-08-22 IMX708 ground sweep: a low-light starting point, not a
+    # daylight default. At 20 fps, 35 ms remains within the 50 ms period.
+    shutter_us: 35000
+    gain: 12.0

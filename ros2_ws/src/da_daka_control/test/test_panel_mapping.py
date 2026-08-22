@@ -3,6 +3,7 @@
 import math
 
 from da_daka_control.panel_mapping import (
+    camera_surface_distance,
     CameraGroundModel,
     MetricPanelObservation,
     PanelMapBuilder,
@@ -12,6 +13,15 @@ from da_daka_control.panel_mapping import (
     quaternion_tilt_rad,
 )
 import pytest
+
+
+def test_camera_surface_distance_applies_measured_vertical_offset():
+    assert camera_surface_distance(3.0, -0.16) == pytest.approx(2.84)
+
+
+def test_camera_surface_distance_rejects_nonpositive_result():
+    with pytest.raises(ValueError, match='must be positive'):
+        camera_surface_distance(0.10, -0.16)
 
 
 def test_image_center_projects_below_vehicle():

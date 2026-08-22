@@ -184,6 +184,8 @@ class LidarTakeoffController:
         max_speed_mps: float,
         slow_zone_m: float,
         max_accel_mps2: float,
+        soft_launch_max_speed_mps: float = 0.0,
+        soft_launch_until_distance_m: float = 0.0,
     ) -> None:
         if target_distance_m <= 0.0:
             raise ValueError('target_distance_m must be greater than zero')
@@ -197,12 +199,27 @@ class LidarTakeoffController:
             raise ValueError('slow_zone_m must be greater than zero')
         if max_accel_mps2 <= 0.0:
             raise ValueError('max_accel_mps2 must be greater than zero')
+        if soft_launch_max_speed_mps < 0.0:
+            raise ValueError('soft_launch_max_speed_mps cannot be negative')
+        if soft_launch_until_distance_m < 0.0:
+            raise ValueError(
+                'soft_launch_until_distance_m cannot be negative'
+            )
+        soft_launch_enabled = soft_launch_max_speed_mps > 0.0
+        if soft_launch_enabled != (soft_launch_until_distance_m > 0.0):
+            raise ValueError(
+                'soft-launch speed and distance must both be zero or positive'
+            )
+        if soft_launch_max_speed_mps > max_speed_mps:
+            raise ValueError('soft-launch speed cannot exceed maximum speed')
         self.target_distance_m = target_distance_m
         self.tolerance_m = tolerance_m
         self.kp = kp
         self.max_speed_mps = max_speed_mps
         self.slow_zone_m = slow_zone_m
         self.max_accel_mps2 = max_accel_mps2
+        self.soft_launch_max_speed_mps = soft_launch_max_speed_mps
+        self.soft_launch_until_distance_m = soft_launch_until_distance_m
         self.reset()
 
     def reset(self) -> None:
@@ -229,6 +246,15 @@ class LidarTakeoffController:
             1.0,
             abs(error) / self.slow_zone_m,
         )
+        if (
+            error > 0.0
+            and self.soft_launch_max_speed_mps > 0.0
+            and measured_distance_m < self.soft_launch_until_distance_m
+        ):
+            speed_limit = min(
+                speed_limit,
+                self.soft_launch_max_speed_mps,
+            )
         desired_output = clamp(self.kp * error, -speed_limit, speed_limit)
         maximum_change = self.max_accel_mps2 * dt
         output = clamp(
@@ -459,6 +485,8 @@ class DistanceControllerNode(Node):
         self.declare_parameter('local_takeoff_stable_max_speed_mps', 0.08)
         self.declare_parameter('takeoff_reference', 'local_z')
         self.declare_parameter('lidar_takeoff_target_distance_m', 1.1)
+        self.declare_parameter('lidar_soft_launch_max_speed_mps', 0.0)
+        self.declare_parameter('lidar_soft_launch_until_distance_m', 0.0)
         self.declare_parameter('lidar_rate_window_s', 0.5)
         self.declare_parameter('target_distance_m', 1.0)
         self.declare_parameter('deadband_m', 0.05)
@@ -640,6 +668,14 @@ class DistanceControllerNode(Node):
             ),
             max_accel_mps2=float(
                 self.get_parameter('local_takeoff_max_accel_mps2').value
+            ),
+            soft_launch_max_speed_mps=float(
+                self.get_parameter('lidar_soft_launch_max_speed_mps').value
+            ),
+            soft_launch_until_distance_m=float(
+                self.get_parameter(
+                    'lidar_soft_launch_until_distance_m'
+                ).value
             ),
         )
         self._local_takeoff_stability = TargetStabilityDetector(

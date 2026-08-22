@@ -209,6 +209,41 @@ def test_lidar_takeoff_corrects_overshoot_downward():
     assert speed < 0.0
 
 
+def test_lidar_takeoff_soft_launch_then_cruise_and_terminal_slowdown():
+    controller = LidarTakeoffController(
+        target_distance_m=3.0,
+        tolerance_m=0.30,
+        kp=0.4,
+        max_speed_mps=0.40,
+        slow_zone_m=1.0,
+        max_accel_mps2=1.0,
+        soft_launch_max_speed_mps=0.25,
+        soft_launch_until_distance_m=0.80,
+    )
+
+    soft_speed, _ = controller.update(0.30, 1.0)
+    assert math.isclose(soft_speed, 0.25)
+
+    cruise_speed, _ = controller.update(1.00, 1.0)
+    assert math.isclose(cruise_speed, 0.40)
+
+    terminal_speed, _ = controller.update(2.50, 1.0)
+    assert math.isclose(terminal_speed, 0.20)
+
+
+def test_lidar_takeoff_rejects_incomplete_soft_launch_profile():
+    with pytest.raises(ValueError, match='must both be zero or positive'):
+        LidarTakeoffController(
+            target_distance_m=3.0,
+            tolerance_m=0.30,
+            kp=0.4,
+            max_speed_mps=0.40,
+            slow_zone_m=1.0,
+            max_accel_mps2=0.25,
+            soft_launch_max_speed_mps=0.25,
+        )
+
+
 def test_lidar_rate_uses_half_second_window():
     estimator = WindowedDistanceRate(0.5)
     assert estimator.update(1.00, 10.00) is None

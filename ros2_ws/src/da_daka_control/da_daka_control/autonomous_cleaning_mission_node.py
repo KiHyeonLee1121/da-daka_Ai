@@ -12,8 +12,11 @@ from da_daka_control.autonomous_cleaning_fsm import (
 from da_daka_control.mission_manager_node import StableWindow, status_failures
 from da_daka_control.panel_distance_mission_fsm import (
     advance_slowed_position_setpoint,
+    early_takeoff_constant_position_allowed,
+    horizontal_estimator_failures,
     lidar_referenced_local_z_target,
     StableYawReference,
+    TimeWindowMedian,
     wrapped_yaw_error,
 )
 from da_daka_control.panel_mapping import PanelTarget
@@ -26,7 +29,7 @@ from da_daka_control.spray_sequence import (
 )
 from da_daka_interfaces.msg import PanelMap, PerceptionResult
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.msg import ExtendedState, State, SysStatus
+from mavros_msgs.msg import EstimatorStatus, ExtendedState, State, SysStatus
 from mavros_msgs.srv import CommandBool, SetMode
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -43,6 +46,7 @@ class AutonomousCleaningMissionNode(Node):
 
     ON_GROUND = 1
     POSITION_STATES = {
+        CleaningMissionState.SURVEY,
         CleaningMissionState.TRANSIT,
         CleaningMissionState.SLOW_APPROACH,
         CleaningMissionState.REACQUIRE,
@@ -74,6 +78,10 @@ class AutonomousCleaningMissionNode(Node):
         )
         self._perception_window = StableWindow(self._perception_stable_s)
         self._alignment_window = StableWindow(self._alignment_stable_s)
+        self._survey_home_window = StableWindow(self._survey_home_stable_s)
+        self._survey_home_speed_filter = TimeWindowMedian(
+            self._survey_home_speed_filter_window_s
+        )
 
         latched_qos = QoSProfile(
             depth=1,
@@ -152,6 +160,12 @@ class AutonomousCleaningMissionNode(Node):
         self.declare_parameter('calibration_approved', False)
         self.declare_parameter('require_live_spray', True)
         self.declare_parameter('survey_duration_s', 3.0)
+        self.declare_parameter('survey_distance_m', 3.0)
+        self.declare_parameter('survey_home_tolerance_m', 0.15)
+        self.declare_parameter('survey_home_max_speed_mps', 0.05)
+        self.declare_parameter('survey_home_stable_s', 2.0)
+        self.declare_parameter('survey_home_speed_filter_window_s', 0.30)
+        self.declare_parameter('survey_home_yaw_tolerance_deg', 3.0)
         self.declare_parameter('spray_distance_m', 1.0)
         self.declare_parameter('spray_duration_s', 3.0)
         self.declare_parameter('maximum_survey_panels', 32)
@@ -164,10 +178,11 @@ class AutonomousCleaningMissionNode(Node):
         self.declare_parameter('horizontal_accel_mps2', 0.50)
         self.declare_parameter('horizontal_slow_zone_m', 1.0)
         self.declare_parameter('minimum_approach_speed_mps', 0.10)
-        self.declare_parameter('target_snap_distance_m', 0.05)
+        self.declare_parameter('target_snap_distance_m', 0.10)
         self.declare_parameter('maximum_vertical_setpoint_speed_mps', 0.20)
         self.declare_parameter('lidar_z_gain', 1.0)
         self.declare_parameter('lidar_z_tolerance_m', 0.10)
+        self.declare_parameter('lidar_z_control_deadband_m', 0.03)
         self.declare_parameter('lidar_z_max_offset_m', 0.35)
         self.declare_parameter('reacquire_radius_m', 0.25)
         self.declare_parameter('reacquire_period_s', 5.0)
@@ -177,13 +192,14 @@ class AutonomousCleaningMissionNode(Node):
         self.declare_parameter('yaw_tolerance_deg', 5.0)
         self.declare_parameter('launch_yaw_stable_s', 1.0)
         self.declare_parameter('launch_yaw_max_deviation_deg', 2.0)
+        self.declare_parameter('takeoff_const_pos_grace_s', 2.0)
         self.declare_parameter('sensor_timeout_s', 0.4)
         self.declare_parameter('telemetry_timeout_s', 0.5)
         self.declare_parameter('perception_timeout_s', 0.7)
         self.declare_parameter('status_timeout_s', 3.0)
         self.declare_parameter('state_timeout_s', 40.0)
         self.declare_parameter('takeoff_timeout_s', 45.0)
-        self.declare_parameter('survey_timeout_s', 15.0)
+        self.declare_parameter('survey_timeout_s', 40.0)
         self.declare_parameter('reacquire_timeout_s', 20.0)
         self.declare_parameter('verification_timeout_s', 20.0)
         self.declare_parameter('minimum_battery_remaining', 0.15)
@@ -202,6 +218,20 @@ class AutonomousCleaningMissionNode(Node):
         self._calibration_approved = bool(value('calibration_approved'))
         self._require_live_spray = bool(value('require_live_spray'))
         self._survey_duration_s = float(value('survey_duration_s'))
+        self._survey_distance_m = float(value('survey_distance_m'))
+        self._survey_home_tolerance_m = float(
+            value('survey_home_tolerance_m')
+        )
+        self._survey_home_max_speed_mps = float(
+            value('survey_home_max_speed_mps')
+        )
+        self._survey_home_stable_s = float(value('survey_home_stable_s'))
+        self._survey_home_speed_filter_window_s = float(
+            value('survey_home_speed_filter_window_s')
+        )
+        self._survey_home_yaw_tolerance_rad = math.radians(
+            float(value('survey_home_yaw_tolerance_deg'))
+        )
         self._spray_distance_m = float(value('spray_distance_m'))
         self._spray_duration_s = float(value('spray_duration_s'))
         self._maximum_survey_panels = int(value('maximum_survey_panels'))
@@ -222,6 +252,9 @@ class AutonomousCleaningMissionNode(Node):
         )
         self._lidar_z_gain = float(value('lidar_z_gain'))
         self._lidar_z_tolerance_m = float(value('lidar_z_tolerance_m'))
+        self._lidar_z_control_deadband_m = float(
+            value('lidar_z_control_deadband_m')
+        )
         self._lidar_z_max_offset_m = float(value('lidar_z_max_offset_m'))
         self._reacquire_radius_m = float(value('reacquire_radius_m'))
         self._reacquire_period_s = float(value('reacquire_period_s'))
@@ -232,6 +265,9 @@ class AutonomousCleaningMissionNode(Node):
         self._launch_yaw_stable_s = float(value('launch_yaw_stable_s'))
         self._launch_yaw_max_deviation_rad = math.radians(
             float(value('launch_yaw_max_deviation_deg'))
+        )
+        self._takeoff_const_pos_grace_s = float(
+            value('takeoff_const_pos_grace_s')
         )
         self._sensor_timeout_s = float(value('sensor_timeout_s'))
         self._telemetry_timeout_s = float(value('telemetry_timeout_s'))
@@ -251,6 +287,12 @@ class AutonomousCleaningMissionNode(Node):
         self._action_retry_s = float(value('action_retry_s'))
         positive = (
             self._survey_duration_s,
+            self._survey_distance_m,
+            self._survey_home_tolerance_m,
+            self._survey_home_max_speed_mps,
+            self._survey_home_stable_s,
+            self._survey_home_speed_filter_window_s,
+            self._survey_home_yaw_tolerance_rad,
             self._spray_distance_m,
             self._spray_duration_s,
             self._arrival_tolerance_m,
@@ -265,15 +307,28 @@ class AutonomousCleaningMissionNode(Node):
             self._maximum_vertical_speed_mps,
             self._lidar_z_gain,
             self._lidar_z_tolerance_m,
+            self._lidar_z_control_deadband_m,
             self._lidar_z_max_offset_m,
             self._reacquire_period_s,
             self._prestream_s,
+            self._takeoff_const_pos_grace_s,
             self._tick_rate_hz,
         )
         if any(item <= 0.0 for item in positive):
             raise ValueError('mission motion/timing parameters must be positive')
         if self._visible_speed_mps > self._cruise_speed_mps:
             raise ValueError('panel-visible speed must not exceed cruise speed')
+        if self._lidar_z_control_deadband_m > self._lidar_z_tolerance_m:
+            raise ValueError(
+                'LiDAR control deadband cannot exceed acceptance tolerance'
+            )
+        if (
+            self._survey_home_speed_filter_window_s
+            > self._telemetry_timeout_s
+        ):
+            raise ValueError(
+                'survey-home speed filter cannot exceed telemetry timeout'
+            )
         if self._maximum_survey_panels <= 0 or self._max_spray_attempts <= 0:
             raise ValueError('panel/attempt limits must be positive')
         if self._max_spray_attempts != 3:
@@ -285,6 +340,12 @@ class AutonomousCleaningMissionNode(Node):
         self.create_subscription(State, '/mavros/state', self._state_cb, 10)
         self.create_subscription(
             ExtendedState, '/mavros/extended_state', self._extended_cb, 10
+        )
+        self.create_subscription(
+            EstimatorStatus,
+            '/mavros/estimator_status',
+            self._estimator_cb,
+            10,
         )
         self.create_subscription(
             PoseStamped,
@@ -400,6 +461,12 @@ class AutonomousCleaningMissionNode(Node):
         self._mode = ''
         self._landed_state: Optional[int] = None
         self._extended_time_s: Optional[float] = None
+        self._estimator_time_s: Optional[float] = None
+        self._estimator_attitude_valid: Optional[bool] = None
+        self._estimator_horizontal_velocity_valid: Optional[bool] = None
+        self._estimator_horizontal_relative_position_valid: Optional[bool] = None
+        self._estimator_horizontal_absolute_position_valid: Optional[bool] = None
+        self._estimator_constant_position_mode: Optional[bool] = None
         self._pose_xyz: Optional[tuple[float, float, float]] = None
         self._yaw_rad: Optional[float] = None
         self._pose_time_s: Optional[float] = None
@@ -467,6 +534,22 @@ class AutonomousCleaningMissionNode(Node):
         self._extended_time_s = time.monotonic()
         self._capture_ground()
 
+    def _estimator_cb(self, message: EstimatorStatus) -> None:
+        self._estimator_attitude_valid = bool(message.attitude_status_flag)
+        self._estimator_horizontal_velocity_valid = bool(
+            message.velocity_horiz_status_flag
+        )
+        self._estimator_horizontal_relative_position_valid = bool(
+            message.pos_horiz_rel_status_flag
+        )
+        self._estimator_horizontal_absolute_position_valid = bool(
+            message.pos_horiz_abs_status_flag
+        )
+        self._estimator_constant_position_mode = bool(
+            message.const_pos_mode_status_flag
+        )
+        self._estimator_time_s = time.monotonic()
+
     def _pose_cb(self, message: PoseStamped) -> None:
         position = message.pose.position
         values = (float(position.x), float(position.y), float(position.z))
@@ -498,8 +581,13 @@ class AutonomousCleaningMissionNode(Node):
         linear = message.twist.linear
         values = (float(linear.x), float(linear.y), float(linear.z))
         if all(math.isfinite(value) for value in values):
+            now_s = time.monotonic()
             self._velocity_xyz = values
-            self._velocity_time_s = time.monotonic()
+            self._velocity_time_s = now_s
+            self._survey_home_speed_filter.update(
+                math.hypot(values[0], values[1]),
+                now_s,
+            )
 
     def _battery_cb(self, message: BatteryState) -> None:
         remaining = float(message.percentage)
@@ -645,6 +733,8 @@ class AutonomousCleaningMissionNode(Node):
         self._arrival.reset()
         self._perception_window.reset()
         self._alignment_window.reset()
+        self._survey_home_window.reset()
+        self._survey_home_speed_filter.reset()
         self._launch_yaw_stability.reset()
         self._publish_survey(False)
         self._publish_ai_mode('idle')
@@ -668,6 +758,26 @@ class AutonomousCleaningMissionNode(Node):
         if self._altitude_guard_triggered:
             self._fail('independent altitude guard triggered', True)
             return
+        if state not in {
+            CleaningMissionState.PRECHECK,
+            CleaningMissionState.LAND,
+        }:
+            allow_constant_position = early_takeoff_constant_position_allowed(
+                landed_on_ground=self._landed_state == self.ON_GROUND,
+                offboard_takeoff_state=(
+                    state == CleaningMissionState.TAKEOFF
+                    and self._stage in {'ENTER_OFFBOARD', 'HOLD'}
+                ),
+                state_elapsed_s=max(0.0, now_s - self._stage_started_s),
+                airborne_grace_s=self._takeoff_const_pos_grace_s,
+            )
+            estimator_failures = self._horizontal_estimator_failures(
+                now_s,
+                allow_constant_position_mode=allow_constant_position,
+            )
+            if estimator_failures:
+                self._fail('; '.join(estimator_failures), self._armed)
+                return
         if state not in {
             CleaningMissionState.PRECHECK,
             CleaningMissionState.ARMING,
@@ -733,6 +843,14 @@ class AutonomousCleaningMissionNode(Node):
             sys_status_time_s=self._sys_time_s,
             require_enabled_sensors_healthy=self._require_health,
             ignored_unhealthy_sensor_mask=self._ignored_health,
+        )
+        failures.extend(
+            self._horizontal_estimator_failures(
+                now_s,
+                allow_constant_position_mode=(
+                    self._landed_state == self.ON_GROUND
+                ),
+            )
         )
         if not self._connected:
             failures.append('MAVROS disconnected')
@@ -844,7 +962,46 @@ class AutonomousCleaningMissionNode(Node):
         if not self._ai_healthy:
             self._fail('laptop AI heartbeat lost during survey', True)
             return
+        if self._tick_position_control_entry(now_s):
+            return
+        if self._mode != 'OFFBOARD':
+            self._fail(
+                f'PX4/QGC mode override during survey: {self._mode}',
+                False,
+            )
+            return
+        if (
+            self._launch_xyz is None
+            or self._launch_yaw_rad is None
+            or self._pose_xyz is None
+            or self._yaw_rad is None
+            or self._distance_m is None
+        ):
+            self._fail('survey launch reference unavailable', True)
+            return
+        target_xyz = self._panel_target_xyz(
+            self._launch_xyz[0],
+            self._launch_xyz[1],
+            target_distance_m=self._survey_distance_m,
+        )
+        self._advance_and_publish_position(target_xyz, now_s)
         if self._survey_started_s is None:
+            filtered_speed = self._survey_home_speed_filter.value(now_s)
+            stable = bool(
+                filtered_speed is not None
+                and math.hypot(
+                    self._pose_xyz[0] - self._launch_xyz[0],
+                    self._pose_xyz[1] - self._launch_xyz[1],
+                ) <= self._survey_home_tolerance_m
+                and filtered_speed <= self._survey_home_max_speed_mps
+                and abs(self._distance_m - self._survey_distance_m)
+                <= self._lidar_z_tolerance_m
+                and abs(
+                    wrapped_yaw_error(self._launch_yaw_rad, self._yaw_rad)
+                ) <= self._survey_home_yaw_tolerance_rad
+            )
+            if not self._survey_home_window.update(stable, now_s):
+                return
             self._survey_started_s = now_s
             self._panel_map = None
             self._publish_ai_mode('survey')
@@ -1241,16 +1398,24 @@ class AutonomousCleaningMissionNode(Node):
             command.twist.linear.y = self._visual_command.twist.linear.y
         self._velocity_publisher.publish(command)
 
-    def _panel_target_xyz(self, east_m: float, north_m: float):
+    def _panel_target_xyz(
+        self,
+        east_m: float,
+        north_m: float,
+        *,
+        target_distance_m: Optional[float] = None,
+    ):
         if self._pose_xyz is None or self._distance_m is None:
             raise RuntimeError('pose/range unavailable for target')
+        if target_distance_m is None:
+            target_distance_m = self._spray_distance_m
         local_z = lidar_referenced_local_z_target(
             local_z_m=self._pose_xyz[2],
             measured_distance_m=self._distance_m,
-            target_distance_m=self._spray_distance_m,
+            target_distance_m=target_distance_m,
             gain=self._lidar_z_gain,
             maximum_offset_m=self._lidar_z_max_offset_m,
-            tolerance_m=self._lidar_z_tolerance_m,
+            tolerance_m=self._lidar_z_control_deadband_m,
         )
         return east_m, north_m, local_z
 
@@ -1404,6 +1569,10 @@ class AutonomousCleaningMissionNode(Node):
         if state == CleaningMissionState.SPRAY:
             self._spray_cycle.reset()
             self._post_spray_barrier = None
+        if state == CleaningMissionState.SURVEY:
+            self._survey_started_s = None
+            self._survey_home_window.reset()
+            self._survey_home_speed_filter.reset()
         if state == CleaningMissionState.TAKEOFF:
             self._stage = 'ENABLE'
             self._control_kind = 'none'
@@ -1481,6 +1650,30 @@ class AutonomousCleaningMissionNode(Node):
             and self._velocity_xyz is not None
             and self._velocity_time_s is not None
             and now_s - self._velocity_time_s <= self._telemetry_timeout_s
+        )
+
+    def _horizontal_estimator_failures(
+        self,
+        now_s: float,
+        *,
+        allow_constant_position_mode: bool = False,
+    ) -> list[str]:
+        return horizontal_estimator_failures(
+            now_s=now_s,
+            timeout_s=self._status_timeout_s,
+            estimator_time_s=self._estimator_time_s,
+            attitude_valid=self._estimator_attitude_valid,
+            horizontal_velocity_valid=(
+                self._estimator_horizontal_velocity_valid
+            ),
+            horizontal_relative_position_valid=(
+                self._estimator_horizontal_relative_position_valid
+            ),
+            horizontal_absolute_position_valid=(
+                self._estimator_horizontal_absolute_position_valid
+            ),
+            constant_position_mode=self._estimator_constant_position_mode,
+            allow_constant_position_mode=allow_constant_position_mode,
         )
 
     def _range_healthy(self, now_s: float) -> bool:

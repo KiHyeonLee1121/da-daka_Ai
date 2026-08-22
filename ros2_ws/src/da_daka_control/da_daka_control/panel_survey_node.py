@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 from da_daka_control.panel_mapping import (
+    camera_surface_distance,
     CameraGroundModel,
     PanelMapBuilder,
     PanelObservation,
@@ -125,6 +126,7 @@ class PanelSurveyNode(Node):
         self.declare_parameter('camera_offset_forward_m', 0.0)
         self.declare_parameter('camera_offset_left_m', 0.0)
         self.declare_parameter('camera_offset_up_m', 0.0)
+        self.declare_parameter('camera_height_above_range_sensor_m', 0.0)
         self.declare_parameter('merge_radius_m', 0.45)
         self.declare_parameter('minimum_observations', 3)
         self.declare_parameter('minimum_panel_confidence', 0.55)
@@ -172,6 +174,9 @@ class PanelSurveyNode(Node):
                 'camera_offset_up_m',
             )
         )
+        self._camera_height_above_range_sensor_m = float(
+            value('camera_height_above_range_sensor_m')
+        )
         self._merge_radius_m = float(value('merge_radius_m'))
         self._minimum_observations = int(value('minimum_observations'))
         self._minimum_panel_confidence = float(
@@ -188,6 +193,8 @@ class PanelSurveyNode(Node):
             raise ValueError('maximum_survey_tilt_deg must be within (0, 90]')
         if min(self._input_timeout_s, self._publish_rate_hz) <= 0.0:
             raise ValueError('survey timeouts/rates must be positive')
+        if not math.isfinite(self._camera_height_above_range_sensor_m):
+            raise ValueError('camera/range height calibration must be finite')
 
     def _pose_callback(self, message: PoseStamped) -> None:
         self._pose = message
@@ -258,7 +265,10 @@ class PanelSurveyNode(Node):
                     vehicle_north_m=float(pose.position.y),
                     vehicle_up_m=float(pose.position.z),
                     vehicle_quaternion_xyzw=orientation,
-                    measured_center_distance_m=self._distance_m,
+                    measured_center_distance_m=camera_surface_distance(
+                        self._distance_m,
+                        self._camera_height_above_range_sensor_m,
+                    ),
                     camera_mount_rpy_rad=self._camera_mount_rpy_rad,
                     camera_offset_body_m=self._camera_offset_body_m,
                 )

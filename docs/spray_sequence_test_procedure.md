@@ -1,5 +1,11 @@
 # Pixhawk AUX5 3초 자율 패널 청소 시험 절차
 
+> 2026-08-22 실기체 상태: 12 V 직결에서는 밸브가 열리지만 DRV8876 경유 시
+> 딸깍 소리만 나고 유로가 열리지 않았다. 코일 저항은 33 Ω이다. IMODE와
+> IPROPI/VREF 전류 제한을 수정하고 3초 wet bench를 통과하기 전까지 live spray
+> 승인을 열지 않는다. 수동 시험은 Disarm/Landed를 강제하는
+> `solenoid_bench.launch.py`만 사용한다.
+
 이 절차는 실제 배선인 `Pi/ROS 2 -> MAVROS -> Pixhawk 4 AUX5 -> DRV8876
 EN/IN1 -> 솔레노이드`를 기준으로 한다. Raspberry Pi GPIO는 사용하지 않는다.
 전기·물 시험 전에는 프로펠러를 제거하고 사람이 DRV8876 전원을 즉시 차단할

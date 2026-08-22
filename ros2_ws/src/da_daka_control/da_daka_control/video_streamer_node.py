@@ -25,6 +25,8 @@ class VideoStreamerNode(Node):
         self.declare_parameter('height', 720)
         self.declare_parameter('framerate', 20)
         self.declare_parameter('bitrate_bps', 4000000)
+        self.declare_parameter('shutter_us', 0)
+        self.declare_parameter('gain', 0.0)
         self.declare_parameter('monitor_rate_hz', 2.0)
         self.declare_parameter('restart_delay_s', 2.0)
         self.declare_parameter('maximum_restart_attempts', 3)
@@ -37,6 +39,8 @@ class VideoStreamerNode(Node):
             height=int(self.get_parameter('height').value),
             framerate=int(self.get_parameter('framerate').value),
             bitrate_bps=int(self.get_parameter('bitrate_bps').value),
+            shutter_us=int(self.get_parameter('shutter_us').value),
+            gain=float(self.get_parameter('gain').value),
         )
         monitor_rate_hz = float(self.get_parameter('monitor_rate_hz').value)
         self._restart_delay_s = float(

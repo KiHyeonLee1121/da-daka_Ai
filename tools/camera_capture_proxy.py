@@ -18,6 +18,10 @@ def _integer(query: dict[str, list[str]], name: str, default: int) -> int:
     return int(query.get(name, [str(default)])[0])
 
 
+def _number(query: dict[str, list[str]], name: str, default: float) -> float:
+    return float(query.get(name, [str(default)])[0])
+
+
 def _sharpness(path: Path) -> float:
     frame = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if frame is None:
@@ -51,14 +55,17 @@ class Handler(BaseHTTPRequestHandler):
             timeout_ms = _integer(query, 'timeout_ms', 900)
             interval_ms = _integer(query, 'interval_ms', 120)
             shutter_us = _integer(query, 'shutter_us', 1000)
+            gain = _number(query, 'gain', 1.0)
             if not 64 <= width <= 4608 or not 64 <= height <= 2592:
                 raise ValueError('image dimensions outside safe range')
             if not 500 <= timeout_ms <= 5000:
                 raise ValueError('timeout outside safe range')
             if not 50 <= interval_ms <= 1000:
                 raise ValueError('interval outside safe range')
-            if not 100 <= shutter_us <= 20000:
+            if not 100 <= shutter_us <= 50000:
                 raise ValueError('shutter outside safe range')
+            if not 1.0 <= gain <= 64.0:
+                raise ValueError('gain outside safe range')
         except (TypeError, ValueError) as error:
             self.send_error(400, str(error))
             return
@@ -79,6 +86,8 @@ class Handler(BaseHTTPRequestHandler):
                         '--zsl',
                         '--shutter',
                         str(shutter_us),
+                        '--gain',
+                        str(gain),
                         '--denoise',
                         'cdn_fast',
                         '--autofocus-mode',
@@ -108,7 +117,7 @@ class Handler(BaseHTTPRequestHandler):
                     'camera-proxy: selected '
                     f'{selected + 1}/{len(paths)}, '
                     f'sharpness={scores[selected]:.1f}, '
-                    f'shutter={shutter_us}us',
+                    f'shutter={shutter_us}us, gain={gain:g}',
                     flush=True,
                 )
                 self.send_response(200)

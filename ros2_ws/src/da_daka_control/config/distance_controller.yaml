@@ -31,6 +31,9 @@ distance_controller:
     local_takeoff_stable_max_speed_mps: 0.08
     takeoff_reference: lidar
     lidar_takeoff_target_distance_m: 1.1
+    # Zero disables the optional near-ground LiDAR takeoff cap.
+    lidar_soft_launch_max_speed_mps: 0.0
+    lidar_soft_launch_until_distance_m: 0.0
     lidar_rate_window_s: 0.5
 
     target_distance_m: 1.0

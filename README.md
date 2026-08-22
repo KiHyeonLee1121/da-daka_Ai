@@ -116,6 +116,11 @@ offload runbook을 따른다.
 회귀시험 대상으로만 유지하며 실제 임무는 `autonomous_cleaning.launch.py`만
 사용한다.
 
+Pi 실기체에서 회수한 장착 오프셋, 방향 계약, 8/21 비행 제어값, 저조도 카메라
+설정과 DRV8876 미해결 상태는
+[`docs/pi_field_calibration_20260821.md`](docs/pi_field_calibration_20260821.md)에
+정리돼 있다.
+
 ## Raspberry Pi에 최신 main을 안전하게 반영하기
 
 Pi 저장소에 커밋하지 않은 파일이나 별도 변경이 있으면 그 폴더에서 바로

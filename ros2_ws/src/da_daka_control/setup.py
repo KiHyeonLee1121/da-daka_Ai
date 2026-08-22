@@ -48,6 +48,7 @@ setup(
             'perception_receiver = '
             'da_daka_control.perception_receiver_node:main',
             'spray_controller = da_daka_control.spray_controller_node:main',
+            'solenoid_bench = da_daka_control.solenoid_bench_node:main',
             'autonomous_cleaning_mission = '
             'da_daka_control.autonomous_cleaning_mission_node:main',
             'video_streamer = da_daka_control.video_streamer_node:main',

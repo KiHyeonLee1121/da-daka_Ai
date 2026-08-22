@@ -31,14 +31,15 @@ panel_distance_mission:
     arrival_stable_s: 2.0
     # Panel-only horizontal profile. Cruise at 0.8 m/s, ramp command speed at
     # 0.6 m/s^2, and slow linearly over the final 1.2 m. The moving setpoint
-    # snaps to the exact corner only inside 5 cm; PX4 XY PID remains unchanged.
+    # snaps to the exact corner inside 10 cm; PX4 XY PID remains unchanged.
     maximum_horizontal_setpoint_speed_mps: 0.80
     horizontal_setpoint_max_accel_mps2: 0.60
     horizontal_slow_zone_m: 1.20
     horizontal_min_approach_speed_mps: 0.12
-    horizontal_target_snap_distance_m: 0.05
+    horizontal_target_snap_distance_m: 0.10
     maximum_vertical_setpoint_speed_mps: 0.20
     cruise_lidar_tolerance_m: 0.10
+    cruise_lidar_control_deadband_m: 0.03
     cruise_lidar_gain: 1.0
     cruise_lidar_max_local_z_offset_m: 0.40
     patrol_pause_s: 1.0

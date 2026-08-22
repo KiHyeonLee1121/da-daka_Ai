@@ -22,8 +22,13 @@ def generate_launch_description() -> LaunchDescription:
     spray_backend = LaunchConfiguration('spray_backend')
     nozzle_forward_m = LaunchConfiguration('camera_to_nozzle_forward_m')
     nozzle_left_m = LaunchConfiguration('camera_to_nozzle_left_m')
+    camera_height_above_lidar_m = LaunchConfiguration(
+        'camera_height_above_lidar_m'
+    )
     laptop_ip = LaunchConfiguration('laptop_ip')
     video_stream_enabled = LaunchConfiguration('video_stream_enabled')
+    camera_shutter_us = LaunchConfiguration('camera_shutter_us')
+    camera_gain = LaunchConfiguration('camera_gain')
 
     return LaunchDescription(
         [
@@ -32,13 +37,18 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument('spray_output_enabled', default_value='false'),
             DeclareLaunchArgument('spray_backend', default_value='mock'),
             DeclareLaunchArgument(
-                'camera_to_nozzle_forward_m', default_value='0.0'
+                'camera_to_nozzle_forward_m', default_value='-0.07'
             ),
             DeclareLaunchArgument(
-                'camera_to_nozzle_left_m', default_value='0.0'
+                'camera_to_nozzle_left_m', default_value='-0.05'
+            ),
+            DeclareLaunchArgument(
+                'camera_height_above_lidar_m', default_value='-0.16'
             ),
             DeclareLaunchArgument('laptop_ip', default_value='127.0.0.1'),
             DeclareLaunchArgument('video_stream_enabled', default_value='false'),
+            DeclareLaunchArgument('camera_shutter_us', default_value='0'),
+            DeclareLaunchArgument('camera_gain', default_value='0.0'),
             Node(
                 package='da_daka_control',
                 executable='tf_luna_serial',
@@ -104,6 +114,10 @@ def generate_launch_description() -> LaunchDescription:
                         'enabled_on_startup': ParameterValue(
                             video_stream_enabled, value_type=bool
                         ),
+                        'shutter_us': ParameterValue(
+                            camera_shutter_us, value_type=int
+                        ),
+                        'gain': ParameterValue(camera_gain, value_type=float),
                     },
                 ],
             ),
@@ -134,6 +148,9 @@ def generate_launch_description() -> LaunchDescription:
                         ),
                         'camera_to_nozzle_left_m': ParameterValue(
                             nozzle_left_m, value_type=float
+                        ),
+                        'camera_height_above_lidar_m': ParameterValue(
+                            camera_height_above_lidar_m, value_type=float
                         ),
                     },
                 ],

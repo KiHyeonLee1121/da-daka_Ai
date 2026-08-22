@@ -5,12 +5,14 @@ import time
 from typing import Optional
 
 from da_daka_control.nozzle_alignment import (
+    body_velocity_to_enu,
     compute_image_velocity,
     nozzle_image_target,
+    quaternion_yaw_rad,
 )
-from da_daka_control.panel_mapping import CameraGroundModel
+from da_daka_control.panel_mapping import camera_surface_distance, CameraGroundModel
 from da_daka_interfaces.msg import PerceptionResult
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -38,6 +40,8 @@ class NozzleVisualServoNode(Node):
         self._result_time_s: Optional[float] = None
         self._distance_m: Optional[float] = None
         self._range_time_s: Optional[float] = None
+        self._yaw_rad: Optional[float] = None
+        self._pose_time_s: Optional[float] = None
         self._last_aligned: Optional[bool] = None
         self._last_valid: Optional[bool] = None
         self._last_visible: Optional[bool] = None
@@ -79,6 +83,12 @@ class NozzleVisualServoNode(Node):
             self._range_callback,
             qos_profile_sensor_data,
         )
+        self.create_subscription(
+            PoseStamped,
+            self._pose_topic,
+            self._pose_callback,
+            qos_profile_sensor_data,
+        )
         self._timer = self.create_timer(1.0 / self._rate_hz, self._tick)
         self._publish_states(False, False, False)
 
@@ -86,6 +96,7 @@ class NozzleVisualServoNode(Node):
         self.declare_parameter('result_topic', '/ai/perception')
         self.declare_parameter('health_topic', '/ai/health')
         self.declare_parameter('range_topic', '/distance/filtered')
+        self.declare_parameter('pose_topic', '/mavros/local_position/pose')
         self.declare_parameter('command_topic', '/visual_servo/cmd_vel_xy')
         self.declare_parameter('aligned_topic', '/visual_servo/aligned')
         self.declare_parameter('valid_topic', '/visual_servo/target_valid')
@@ -99,13 +110,14 @@ class NozzleVisualServoNode(Node):
         self.declare_parameter('image_y_positive_is_forward', False)
         self.declare_parameter('camera_to_nozzle_forward_m', 0.0)
         self.declare_parameter('camera_to_nozzle_left_m', 0.0)
+        self.declare_parameter('camera_height_above_lidar_m', 0.0)
         self.declare_parameter('safe_frame_margin_norm', 0.05)
         self.declare_parameter('deadband_norm', 0.035)
         self.declare_parameter('gain_mps_per_norm', 0.35)
         self.declare_parameter('maximum_speed_mps', 0.12)
         self.declare_parameter('image_x_velocity_axis', 'y')
         self.declare_parameter('image_y_velocity_axis', 'x')
-        self.declare_parameter('invert_image_x', False)
+        self.declare_parameter('invert_image_x', True)
         self.declare_parameter('invert_image_y', True)
 
     def _load_parameters(self) -> None:
@@ -115,6 +127,7 @@ class NozzleVisualServoNode(Node):
         self._result_topic = str(value('result_topic'))
         self._health_topic = str(value('health_topic'))
         self._range_topic = str(value('range_topic'))
+        self._pose_topic = str(value('pose_topic'))
         self._command_topic = str(value('command_topic'))
         self._aligned_topic = str(value('aligned_topic'))
         self._valid_topic = str(value('valid_topic'))
@@ -136,6 +149,9 @@ class NozzleVisualServoNode(Node):
         )
         self._nozzle_forward_m = float(value('camera_to_nozzle_forward_m'))
         self._nozzle_left_m = float(value('camera_to_nozzle_left_m'))
+        self._camera_height_above_lidar_m = float(
+            value('camera_height_above_lidar_m')
+        )
         self._safe_margin_norm = float(value('safe_frame_margin_norm'))
         self._deadband_norm = float(value('deadband_norm'))
         self._gain = float(value('gain_mps_per_norm'))
@@ -146,6 +162,17 @@ class NozzleVisualServoNode(Node):
         self._invert_image_y = bool(value('invert_image_y'))
         if min(self._rate_hz, self._input_timeout_s) <= 0.0:
             raise ValueError('visual servo rates/timeouts must be positive')
+        if self._frame_id != 'map':
+            raise ValueError('visual servo output frame_id must be map/ENU')
+        if not all(
+            math.isfinite(value)
+            for value in (
+                self._nozzle_forward_m,
+                self._nozzle_left_m,
+                self._camera_height_above_lidar_m,
+            )
+        ):
+            raise ValueError('visual servo mount calibration must be finite')
 
     def _result_callback(self, message: PerceptionResult) -> None:
         self._result = message
@@ -161,6 +188,19 @@ class NozzleVisualServoNode(Node):
         self._distance_m = distance_m
         self._range_time_s = time.monotonic()
 
+    def _pose_callback(self, message: PoseStamped) -> None:
+        orientation = message.pose.orientation
+        try:
+            self._yaw_rad = quaternion_yaw_rad(
+                float(orientation.x),
+                float(orientation.y),
+                float(orientation.z),
+                float(orientation.w),
+            )
+        except ValueError:
+            return
+        self._pose_time_s = time.monotonic()
+
     def _tick(self) -> None:
         now_s = time.monotonic()
         fresh = (
@@ -171,6 +211,9 @@ class NozzleVisualServoNode(Node):
             and self._distance_m is not None
             and self._range_time_s is not None
             and now_s - self._range_time_s <= self._input_timeout_s
+            and self._yaw_rad is not None
+            and self._pose_time_s is not None
+            and now_s - self._pose_time_s <= self._input_timeout_s
         )
         visible = bool(fresh and self._result.panel_visible)
         target_valid = bool(
@@ -190,11 +233,14 @@ class NozzleVisualServoNode(Node):
                     self._camera,
                     camera_to_nozzle_forward_m=self._nozzle_forward_m,
                     camera_to_nozzle_left_m=self._nozzle_left_m,
-                    distance_m=self._distance_m,
+                    distance_m=camera_surface_distance(
+                        self._distance_m,
+                        self._camera_height_above_lidar_m,
+                    ),
                     safe_margin_norm=self._safe_margin_norm,
                 )
                 if target.inside_safe_frame:
-                    x_speed, y_speed, aligned = compute_image_velocity(
+                    body_forward_mps, body_left_mps, aligned = compute_image_velocity(
                         observed_x_norm=float(
                             self._result.dirt_centroid_x_norm
                         ),
@@ -211,8 +257,13 @@ class NozzleVisualServoNode(Node):
                         invert_x=self._invert_image_x,
                         invert_y=self._invert_image_y,
                     )
-                    command.twist.linear.x = x_speed
-                    command.twist.linear.y = y_speed
+                    east_mps, north_mps = body_velocity_to_enu(
+                        body_forward_mps,
+                        body_left_mps,
+                        self._yaw_rad,
+                    )
+                    command.twist.linear.x = east_mps
+                    command.twist.linear.y = north_mps
                 else:
                     target_valid = False
             except ValueError as exc:

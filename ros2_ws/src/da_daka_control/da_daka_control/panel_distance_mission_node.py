@@ -255,6 +255,7 @@ class PanelDistanceMissionNode(Node):
         self.declare_parameter('horizontal_target_snap_distance_m', 0.05)
         self.declare_parameter('maximum_vertical_setpoint_speed_mps', 0.20)
         self.declare_parameter('cruise_lidar_tolerance_m', 0.10)
+        self.declare_parameter('cruise_lidar_control_deadband_m', 0.03)
         self.declare_parameter('cruise_lidar_gain', 1.0)
         self.declare_parameter('cruise_lidar_max_local_z_offset_m', 0.40)
         self.declare_parameter('patrol_pause_s', 1.0)
@@ -317,6 +318,9 @@ class PanelDistanceMissionNode(Node):
         self._cruise_lidar_tolerance_m = float(
             value('cruise_lidar_tolerance_m')
         )
+        self._cruise_lidar_control_deadband_m = float(
+            value('cruise_lidar_control_deadband_m')
+        )
         self._cruise_lidar_gain = float(value('cruise_lidar_gain'))
         self._cruise_lidar_max_offset_m = float(
             value('cruise_lidar_max_local_z_offset_m')
@@ -368,6 +372,7 @@ class PanelDistanceMissionNode(Node):
             self._horizontal_target_snap_distance_m,
             self._maximum_vertical_setpoint_speed_mps,
             self._cruise_lidar_tolerance_m,
+            self._cruise_lidar_control_deadband_m,
             self._cruise_lidar_gain,
             self._cruise_lidar_max_offset_m,
             self._patrol_pause_s,
@@ -391,6 +396,13 @@ class PanelDistanceMissionNode(Node):
             raise ValueError(
                 'panel distance mission timing/distance values must be '
                 'positive'
+            )
+        if (
+            self._cruise_lidar_control_deadband_m
+            > self._cruise_lidar_tolerance_m
+        ):
+            raise ValueError(
+                'cruise LiDAR control deadband cannot exceed tolerance'
             )
         if not 0.0 <= self._minimum_battery <= 1.0:
             raise ValueError('minimum_battery_remaining must be in [0, 1]')
@@ -1194,7 +1206,7 @@ class PanelDistanceMissionNode(Node):
             target_distance_m=self._move_target_distance_m(),
             gain=self._cruise_lidar_gain,
             maximum_offset_m=self._cruise_lidar_max_offset_m,
-            tolerance_m=self._cruise_lidar_tolerance_m,
+            tolerance_m=self._cruise_lidar_control_deadband_m,
         )
         return (
             self._launch_xyz[0] + east_m,

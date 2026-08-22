@@ -2,13 +2,12 @@
 
 from pathlib import Path
 
-import yaml
-
 from da_daka_control.spray_sequence import (
     perception_is_newer,
     PerceptionBarrier,
     SprayCycleTracker,
 )
+import yaml
 
 
 def test_trigger_response_does_not_complete_the_spray():

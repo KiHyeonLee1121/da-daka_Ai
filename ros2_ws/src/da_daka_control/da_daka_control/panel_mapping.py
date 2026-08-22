@@ -8,6 +8,19 @@ def _finite(*values: float) -> bool:
     return all(math.isfinite(value) for value in values)
 
 
+def camera_surface_distance(
+    range_sensor_distance_m: float,
+    camera_height_above_sensor_m: float,
+) -> float:
+    """Convert a range-sensor surface distance to camera optical distance."""
+    if not _finite(range_sensor_distance_m, camera_height_above_sensor_m):
+        raise ValueError('camera/range height inputs must be finite')
+    distance_m = range_sensor_distance_m + camera_height_above_sensor_m
+    if distance_m <= 0.0:
+        raise ValueError('camera surface distance must be positive')
+    return distance_m
+
+
 @dataclass(frozen=True)
 class CameraGroundModel:
     """Map a downward camera's normalized image coordinates to body FLU."""

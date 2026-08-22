@@ -3,10 +3,10 @@ set -euo pipefail
 
 # Copy this file to the GPU laptop and run it there. It connects to the
 # Raspberry Pi over SSH and starts the Pi camera/edge link toward the laptop.
-PI_IP="${PI_IP:-172.29.215.181}"
+PI_IP="${PI_IP:-10.205.180.181}"
 PI_USER="${PI_USER:-kihyeon}"
-LAPTOP_IP="${LAPTOP_IP:-172.29.215.126}"
-PI_PROJECT="${PI_PROJECT:-/home/kihyeon/da-daka_Ai-main-integration-20260816-031902}"
+LAPTOP_IP="${LAPTOP_IP:-10.205.180.126}"
+PI_PROJECT="${PI_PROJECT:-/home/kihyeon/da-daka_Ai}"
 PI_WORKSPACE="${PI_WORKSPACE:-${PI_PROJECT}/ros2_ws}"
 PI_LAUNCHER="${PI_LAUNCHER:-${PI_PROJECT}/tools/edge_gpu_link.py}"
 

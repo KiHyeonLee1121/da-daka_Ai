@@ -7,6 +7,13 @@ autonomous_cleaning_mission:
     require_live_spray: true
 
     survey_duration_s: 3.0
+    survey_distance_m: 3.0
+    # 2026-08-21 flight: hold the measured launch point and yaw before survey.
+    survey_home_tolerance_m: 0.15
+    survey_home_max_speed_mps: 0.05
+    survey_home_stable_s: 2.0
+    survey_home_speed_filter_window_s: 0.30
+    survey_home_yaw_tolerance_deg: 3.0
     spray_distance_m: 1.0
     spray_duration_s: 3.0
     maximum_survey_panels: 32
@@ -20,11 +27,14 @@ autonomous_cleaning_mission:
     horizontal_accel_mps2: 0.50
     horizontal_slow_zone_m: 1.0
     minimum_approach_speed_mps: 0.10
-    target_snap_distance_m: 0.05
+    # Flight-tested braking/settling profile at the exact target.
+    target_snap_distance_m: 0.10
     maximum_vertical_setpoint_speed_mps: 0.20
 
     lidar_z_gain: 1.0
     lidar_z_tolerance_m: 0.10
+    # Keep controlling inside the wider arrival gate to avoid boundary hunt.
+    lidar_z_control_deadband_m: 0.03
     lidar_z_max_offset_m: 0.35
     reacquire_radius_m: 0.25
     reacquire_period_s: 5.0
@@ -35,6 +45,7 @@ autonomous_cleaning_mission:
     yaw_tolerance_deg: 5.0
     launch_yaw_stable_s: 1.0
     launch_yaw_max_deviation_deg: 2.0
+    takeoff_const_pos_grace_s: 2.0
 
     sensor_timeout_s: 0.4
     telemetry_timeout_s: 0.5
@@ -42,7 +53,7 @@ autonomous_cleaning_mission:
     status_timeout_s: 3.0
     state_timeout_s: 40.0
     takeoff_timeout_s: 45.0
-    survey_timeout_s: 15.0
+    survey_timeout_s: 40.0
     reacquire_timeout_s: 20.0
     verification_timeout_s: 20.0
 

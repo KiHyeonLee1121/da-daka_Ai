@@ -91,8 +91,9 @@ chmod +x tools/gpu_laptop_start_pi_camera.sh
 ./tools/gpu_laptop_start_pi_camera.sh
 ```
 
-기본값은 2026-08-16 시험 환경인 Pi `172.29.215.181`, 노트북
-`172.29.215.126`이다. 주소나 Pi checkout 위치가 다르면 실행할 때 바꾼다.
+기본값은 2026-08-21 `bebeliar` 현장 환경인 Pi `10.205.180.181`, 노트북
+`10.205.180.126`이다. DHCP 주소이므로 다음 현장 기동 때 다시 확인하고,
+주소나 Pi checkout 위치가 다르면 실행할 때 환경변수로 바꾼다.
 
 ```bash
 PI_IP=<PI_IP> \
@@ -218,7 +219,7 @@ ros2 topic pub --once /ai/requested_mode std_msgs/msg/String '{data: idle}'
 
 | 항목 | 결과 |
 |---|---|
-| Pi / 노트북 | `172.29.215.181` / `172.29.215.126` (임시 hotspot 주소) |
+| Pi / 노트북 | `10.205.180.181` / `10.205.180.126` (2026-08-21 DHCP 주소) |
 | 카메라 | Pi IMX708, 1280×720, 20 fps, 4 Mbit/s |
 | protocol-v2 초기 상태 | `accepted=155`, `rejected=0`, `/ai/health=true` |
 | idle 수신률 | 약 3.5 Hz |

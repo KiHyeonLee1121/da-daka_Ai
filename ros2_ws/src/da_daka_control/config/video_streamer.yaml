@@ -8,6 +8,10 @@ video_streamer:
     height: 720
     framerate: 20
     bitrate_bps: 4000000
+    # Zero keeps normal auto exposure. Use video_streamer_low_light.yaml or
+    # launch overrides only after a ground exposure check.
+    shutter_us: 0
+    gain: 0.0
     monitor_rate_hz: 2.0
     restart_delay_s: 2.0
     maximum_restart_attempts: 3

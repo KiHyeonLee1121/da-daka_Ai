@@ -6,6 +6,7 @@ height=1080
 timeout_ms=900
 interval_ms=120
 shutter_us=1000
+gain=1.0
 output=
 
 while [ "$#" -gt 0 ]; do
@@ -15,6 +16,7 @@ while [ "$#" -gt 0 ]; do
         --timeout) timeout_ms="$2"; shift 2 ;;
         --timelapse) interval_ms="$2"; shift 2 ;;
         --shutter) shutter_us="$2"; shift 2 ;;
+        --gain) gain="$2"; shift 2 ;;
         --output|-o) output="$2"; shift 2 ;;
         --denoise|--autofocus-mode) shift 2 ;;
         --nopreview|--zsl) shift ;;
@@ -33,5 +35,6 @@ exec curl --fail --silent --show-error --get \
     --data-urlencode "timeout_ms=$timeout_ms" \
     --data-urlencode "interval_ms=$interval_ms" \
     --data-urlencode "shutter_us=$shutter_us" \
+    --data-urlencode "gain=$gain" \
     "http://127.0.0.1:18765/capture" \
     --output "$output"

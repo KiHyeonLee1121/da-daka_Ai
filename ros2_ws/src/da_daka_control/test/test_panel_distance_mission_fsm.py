@@ -5,11 +5,14 @@ import math
 from da_daka_control.panel_distance_mission_fsm import (
     advance_slowed_position_setpoint,
     body_offset_to_enu,
+    early_takeoff_constant_position_allowed,
+    horizontal_estimator_failures,
     lidar_referenced_local_z_target,
     MissionPhase,
     PanelDistanceMissionFsm,
     PanelDistanceMissionState,
     StableYawReference,
+    TimeWindowMedian,
     wrapped_yaw_error,
 )
 from da_daka_control.panel_mission_fsm import PanelRoute, RelativeWaypoint
@@ -85,7 +88,7 @@ def test_horizontal_profile_keeps_minimum_speed_until_snap_zone():
     assert position == pytest.approx((2.912, 0.0, 1.0))
 
 
-def test_horizontal_profile_snaps_to_corner_inside_five_cm():
+def test_horizontal_profile_snaps_to_corner_inside_configured_zone():
     position, speed = advance_horizontal_profile(
         current_xyz=(2.96, 0.0, 0.8),
         actual_xy=(2.94, 0.0),
@@ -124,6 +127,70 @@ def test_body_square_offsets_rotate_once_into_enu(
 def test_wrapped_yaw_error_uses_shortest_turn_across_pi():
     error = wrapped_yaw_error(math.radians(-179.0), math.radians(179.0))
     assert math.degrees(error) == pytest.approx(2.0)
+
+
+def test_time_window_median_rejects_one_velocity_spike():
+    detector = TimeWindowMedian(0.30)
+    detector.update(0.02, 1.00)
+    detector.update(0.04, 1.10)
+    detector.update(0.80, 1.20)
+    detector.update(0.03, 1.30)
+
+    assert detector.value(1.30) == pytest.approx(0.035)
+
+
+def test_time_window_median_requires_full_fresh_window():
+    detector = TimeWindowMedian(0.30)
+    detector.update(0.02, 1.00)
+    detector.update(0.03, 1.20)
+    assert detector.value(1.20) is None
+    assert detector.value(1.60) is None
+
+    detector.update(0.01, 2.00)
+    assert detector.value(2.00) is None
+
+
+def test_horizontal_estimator_accepts_relative_or_absolute_position():
+    failures = horizontal_estimator_failures(
+        now_s=10.0,
+        timeout_s=0.5,
+        estimator_time_s=9.9,
+        attitude_valid=True,
+        horizontal_velocity_valid=True,
+        horizontal_relative_position_valid=False,
+        horizontal_absolute_position_valid=True,
+        constant_position_mode=False,
+    )
+    assert failures == []
+
+
+def test_horizontal_estimator_rejects_constant_position_mode_in_flight():
+    failures = horizontal_estimator_failures(
+        now_s=10.0,
+        timeout_s=0.5,
+        estimator_time_s=9.9,
+        attitude_valid=True,
+        horizontal_velocity_valid=True,
+        horizontal_relative_position_valid=True,
+        horizontal_absolute_position_valid=True,
+        constant_position_mode=True,
+    )
+    assert failures == ['PX4 estimator is in constant-position mode']
+
+
+def test_takeoff_const_pos_grace_is_bounded_after_liftoff():
+    assert early_takeoff_constant_position_allowed(
+        landed_on_ground=False,
+        offboard_takeoff_state=True,
+        state_elapsed_s=1.9,
+        airborne_grace_s=2.0,
+    )
+    assert not early_takeoff_constant_position_allowed(
+        landed_on_ground=False,
+        offboard_takeoff_state=True,
+        state_elapsed_s=2.1,
+        airborne_grace_s=2.0,
+    )
 
 
 def test_launch_yaw_latches_circular_mean_after_stable_full_window():
