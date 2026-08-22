@@ -6,6 +6,7 @@ import math
 import time
 from typing import Deque, Optional
 
+from da_daka_control.spray_reaction import apply_vertical_feedforward
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import State
 import rclpy
@@ -511,6 +512,14 @@ class DistanceControllerNode(Node):
         self.declare_parameter('yaw_target_timeout_s', 0.3)
         self.declare_parameter('yaw_hold_kp', 1.0)
         self.declare_parameter('yaw_hold_max_rate_rad_s', 0.35)
+        # Applied only during LiDAR distance hold, never during takeoff.
+        self.declare_parameter('spray_ff_enabled', False)
+        self.declare_parameter(
+            'spray_ff_topic', '/spray_reaction/vertical_velocity_ff'
+        )
+        self.declare_parameter('spray_ff_timeout_s', 0.3)
+        self.declare_parameter('maximum_spray_ff_mps', 0.3)
+        self.declare_parameter('max_total_vertical_speed_mps', 0.25)
 
         self._input_topic = str(self.get_parameter('input_topic').value)
         command_topic = str(self.get_parameter('command_topic').value)
@@ -540,6 +549,7 @@ class DistanceControllerNode(Node):
         yaw_target_topic = str(
             self.get_parameter('yaw_target_topic').value
         )
+        spray_ff_topic = str(self.get_parameter('spray_ff_topic').value)
         self._frame_id = str(self.get_parameter('frame_id').value)
         self._control_rate_hz = float(self.get_parameter('control_rate_hz').value)
         self._enabled = bool(self.get_parameter('enabled_on_startup').value)
@@ -571,9 +581,29 @@ class DistanceControllerNode(Node):
         self._yaw_hold_max_rate_rad_s = float(
             self.get_parameter('yaw_hold_max_rate_rad_s').value
         )
+        self._spray_ff_enabled = bool(
+            self.get_parameter('spray_ff_enabled').value
+        )
+        self._spray_ff_timeout_s = float(
+            self.get_parameter('spray_ff_timeout_s').value
+        )
+        self._maximum_spray_ff_mps = float(
+            self.get_parameter('maximum_spray_ff_mps').value
+        )
+        self._max_total_vertical_speed_mps = float(
+            self.get_parameter('max_total_vertical_speed_mps').value
+        )
 
         if self._control_rate_hz <= 0.0:
             raise ValueError('control_rate_hz must be greater than zero')
+        if self._spray_ff_timeout_s <= 0.0:
+            raise ValueError('spray_ff_timeout_s must be greater than zero')
+        if self._maximum_spray_ff_mps <= 0.0:
+            raise ValueError('maximum_spray_ff_mps must be greater than zero')
+        if self._max_total_vertical_speed_mps <= 0.0:
+            raise ValueError(
+                'max_total_vertical_speed_mps must be greater than zero'
+            )
         if self._sensor_timeout_s <= 0.0:
             raise ValueError('sensor_timeout_s must be greater than zero')
         if self._local_position_timeout_s <= 0.0:
@@ -715,6 +745,8 @@ class DistanceControllerNode(Node):
         self._watchdog_active = False
         self._target_reached = False
         self._local_takeoff_reached = False
+        self._spray_ff_mps = 0.0
+        self._spray_ff_time_s: Optional[float] = None
 
         self._command_publisher = self.create_publisher(
             TwistStamped,
@@ -796,6 +828,12 @@ class DistanceControllerNode(Node):
             self._yaw_target_callback,
             qos_profile_sensor_data,
         )
+        self._spray_ff_subscription = self.create_subscription(
+            Float32,
+            spray_ff_topic,
+            self._spray_ff_callback,
+            qos_profile_sensor_data,
+        )
         self._enable_service = self.create_service(
             SetBool,
             enable_service,
@@ -867,6 +905,17 @@ class DistanceControllerNode(Node):
         if math.isfinite(target_rad):
             self._yaw_target_rad = target_rad
             self._yaw_target_time = time.monotonic()
+
+    def _spray_ff_callback(self, message: Float32) -> None:
+        feedforward_mps = float(message.data)
+        if not math.isfinite(feedforward_mps):
+            return
+        self._spray_ff_mps = clamp(
+            feedforward_mps,
+            -self._maximum_spray_ff_mps,
+            self._maximum_spray_ff_mps,
+        )
+        self._spray_ff_time_s = time.monotonic()
 
     def _velocity_callback(self, message: TwistStamped) -> None:
         vertical_speed_mps = float(message.twist.linear.z)
@@ -1137,7 +1186,20 @@ class DistanceControllerNode(Node):
             dt,
             measured_distance_rate_mps=self._latest_distance_rate_mps,
         )
-        self._publish_command(speed)
+        spray_ff_fresh = (
+            self._spray_ff_enabled
+            and self._spray_ff_time_s is not None
+            and now - self._spray_ff_time_s <= self._spray_ff_timeout_s
+        )
+        feedforward_speed_mps = (
+            self._spray_ff_mps if spray_ff_fresh else 0.0
+        )
+        total_speed_mps = apply_vertical_feedforward(
+            speed,
+            feedforward_speed_mps,
+            self._max_total_vertical_speed_mps,
+        )
+        self._publish_command(total_speed_mps)
         self._error_publisher.publish(Float32(data=error))
         lidar_rate_fresh = self._latest_distance_rate_mps is not None
         flight_state_valid = (

@@ -71,3 +71,11 @@ distance_controller:
     yaw_target_timeout_s: 0.3
     yaw_hold_kp: 1.0
     yaw_hold_max_rate_rad_s: 0.35
+
+    # Spray-reaction feedforward remains inert until explicitly approved.
+    spray_ff_enabled: false
+    spray_ff_topic: /spray_reaction/vertical_velocity_ff
+    spray_ff_timeout_s: 0.3
+    maximum_spray_ff_mps: 0.3
+    # Preserve the current distance-control speed envelope by default.
+    max_total_vertical_speed_mps: 0.25

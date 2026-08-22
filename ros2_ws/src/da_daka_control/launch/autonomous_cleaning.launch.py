@@ -20,6 +20,7 @@ def generate_launch_description() -> LaunchDescription:
     calibration_approved = LaunchConfiguration('calibration_approved')
     spray_output_enabled = LaunchConfiguration('spray_output_enabled')
     spray_backend = LaunchConfiguration('spray_backend')
+    spray_reaction_enabled = LaunchConfiguration('spray_reaction_enabled')
     nozzle_forward_m = LaunchConfiguration('camera_to_nozzle_forward_m')
     nozzle_left_m = LaunchConfiguration('camera_to_nozzle_left_m')
     camera_height_above_lidar_m = LaunchConfiguration(
@@ -36,6 +37,9 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument('calibration_approved', default_value='false'),
             DeclareLaunchArgument('spray_output_enabled', default_value='false'),
             DeclareLaunchArgument('spray_backend', default_value='mock'),
+            DeclareLaunchArgument(
+                'spray_reaction_enabled', default_value='false'
+            ),
             DeclareLaunchArgument(
                 'camera_to_nozzle_forward_m', default_value='-0.07'
             ),
@@ -89,6 +93,9 @@ def generate_launch_description() -> LaunchDescription:
                         'target_stable_require_local_velocity': True,
                         'target_stable_max_vehicle_speed_mps': 0.05,
                         'hold_yaw_enabled': True,
+                        'spray_ff_enabled': ParameterValue(
+                            spray_reaction_enabled, value_type=bool
+                        ),
                     },
                 ],
             ),
@@ -100,6 +107,20 @@ def generate_launch_description() -> LaunchDescription:
                 parameters=[
                     config('perception_receiver.yaml'),
                     {'allowed_remote_ip': laptop_ip},
+                ],
+            ),
+            Node(
+                package='da_daka_control',
+                executable='spray_reaction_compensator',
+                name='spray_reaction_compensator',
+                output='screen',
+                parameters=[
+                    config('spray_reaction_compensator_integrated.yaml'),
+                    {
+                        'output_enabled': ParameterValue(
+                            spray_reaction_enabled, value_type=bool
+                        ),
+                    },
                 ],
             ),
             Node(

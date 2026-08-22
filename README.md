@@ -100,6 +100,7 @@ flowchart TB
 | `laptop_ai` | CUDA 전용 ONNX 추론 worker와 성능 측정 도구 |
 | `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
 | `docs/edge_gpu_offload_runbook.md` | Pi–노트북 GPU offload 연결, 안전 점검과 2026-08-16 현장 검증 결과 |
+| `docs/spray_reaction_feedforward.md` | 분사 반동 feedforward 통합, 실측값과 승인 절차 |
 | `docs/field_diagnostics.md` | 좌표 투영과 카메라 진단 절차 |
 | `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
 | `tools` | 비행 명령을 내리지 않는 카메라/투영 진단 도구 |
@@ -288,6 +289,7 @@ ros2 launch da_daka_control autonomous_cleaning.launch.py \
   calibration_approved:=true \
   spray_backend:=pixhawk \
   spray_output_enabled:=true \
+  spray_reaction_enabled:=false \
   camera_to_nozzle_forward_m:=<MEASURED_FORWARD_M> \
   camera_to_nozzle_left_m:=<MEASURED_LEFT_M>
 ```
@@ -428,6 +430,7 @@ footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서�
 | `configuration_approved` | `false` | 실제 IP/port, serial, MAVROS/PX4, AUX5/DRV8876, 비행구역과 경로 안전 설정 검토 완료 |
 | `calibration_approved` | `false` | 카메라 footprint/자세/위치, 영상 축, 노즐 오프셋, LiDAR 거리의 반복 측정과 투영·정렬 시험 통과 |
 | `spray_output_enabled` | `false` | 구동회로, polarity, OFF 기본상태, pulse/cooldown, abort/전원 고장 시험 통과 |
+| `spray_reaction_enabled` | `false` | 펌프·노즐·질량·유량 rise/fall 실측과 feedforward OFF/ON 비교·안전 회귀시험 통과 |
 | `require_live_spray` | `true` | 운영 mission에서는 유지한다. 실제 분사 output이 없으면 PRECHECK가 실패해야 한다. |
 
 승인은 “값을 파일에 입력했다”는 의미가 아니라 측정 기록과 아래 시험의 통과를
@@ -493,6 +496,7 @@ PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
 
 - [최종 자율 청소 구조](docs/autonomous_cleaning_architecture.md)
 - [3초 분사 시퀀스 시험 절차](docs/spray_sequence_test_procedure.md)
+- [분사 반동 피드포워드 통합](docs/spray_reaction_feedforward.md)
 - [현장 좌표·카메라 진단](docs/field_diagnostics.md)
 - [브랜치 통합 감사 기록](docs/branch_consolidation.md)
 - [노트북 AI worker](laptop_ai/README.md)

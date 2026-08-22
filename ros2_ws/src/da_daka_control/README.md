@@ -287,6 +287,17 @@ PX4 geofence 및 onboard failsafe 설정을 대체하지 않는다.
 ±0.08 m는 VM/SITL에서 마지막으로 검증된 값이다. 실제 TF-Luna 로그를
 확인한 뒤 좁히거나 넓혀야 하며, 검증 없이 당일 임의 변경하지 않는다.
 
+## 분사 반동 feedforward
+
+`spray_reaction_compensator`는 Pixhawk 분사 controller의 `/spray/active` 활성
+추정값을 받아 제한된 수직속도 feedforward를 계산한다. `distance_controller`가
+이 값을 LiDAR 거리 PID 출력에 더하되 최종 수직속도 상한을 다시 적용한다.
+
+현재 물리값은 제공된 패키지의 실측 전 임시값이며, 통합 launch의
+`spray_reaction_enabled` 기본값은 `false`다. 최종 장착 상태의 펌프·노즐·유량,
+기체 질량과 밸브 응답시간을 측정하고 propellers-off 회귀시험을 통과하기 전에는
+활성화하지 않는다. 자세한 절차는 `docs/spray_reaction_feedforward.md`를 따른다.
+
 ## QGC와 PX4 failsafe 개입
 
 거리제어 또는 목표 유지 중 PX4 모드가 OFFBOARD에서 다른 모드로 바뀌면:
