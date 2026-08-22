@@ -103,6 +103,8 @@ flowchart TB
 | `docs/spray_reaction_feedforward.md` | 분사 반동 feedforward 통합, 실측값과 승인 절차 |
 | `docs/field_diagnostics.md` | 좌표 투영과 카메라 진단 절차 |
 | `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
+| `operator_app` | Pi 데스크톱/VNC용 PyQt5 운영 화면(직접 MAVROS 제어 없음) |
+| `docs/pi_operator_app.md` | 운영 앱, 계류 1 m 실기체 검증, 안전 잠금과 업데이트 원칙 |
 | `tools` | 비행 명령을 내리지 않는 카메라/투영 진단 도구 |
 
 Pi의 ROS 2가 Docker 안에서 실행되고 카메라 도구가 호스트에만 있는 경우,
@@ -140,6 +142,13 @@ Pi 저장소에 커밋하지 않은 파일이나 별도 변경이 있으면 그 
 
 최신 main을 받은 뒤에도 Pi 실측 설정은 별도 로컬 배포 설정이나 명확히 식별된
 커밋으로 관리한다. 토큰, 비밀번호, 개인키는 저장소에 커밋하지 않는다.
+
+Pi 전용 운영 앱의 `소프트웨어 업데이트` 탭은 깨끗한 `main`이 원격보다 뒤에
+있을 때만 자동 fast-forward를 제공한다. PX4/MAVROS 연결, DISARM, 지상 상태,
+미션 비활성과 관련 컨테이너 정지를 모두 확인하며, 별도 worktree의 테스트와 ROS
+빌드를 통과한 커밋만 적용한다. 로컬 변경이나 미푸시 커밋이 있으면 위 수동 보존
+절차를 사용해야 한다. 자세한 동작은
+[`docs/pi_operator_app.md`](docs/pi_operator_app.md)에 기록돼 있다.
 
 ## 준비 환경
 

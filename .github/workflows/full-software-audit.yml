@@ -27,7 +27,7 @@ jobs:
       - name: Compile Python sources
         run: |
           python -m compileall -q \
-            actuator control sensors utils vision tests tools \
+            actuator control sensors utils vision tests tools operator_app \
             laptop_ai/laptop_ai laptop_ai/tests \
             ros2_ws/src/da_daka_control/da_daka_control \
             ros2_ws/src/da_daka_control/launch \

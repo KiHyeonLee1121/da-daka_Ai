@@ -12,6 +12,7 @@ venv/
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+ros2_ws/run/
 build/
 install/
 log/
@@ -23,6 +24,7 @@ logs/*.jsonl
 logs/*.ulg
 logs/*.tlog
 logs/*.mp4
+models/*.onnx
 
 # Local configuration and editor files
 .env

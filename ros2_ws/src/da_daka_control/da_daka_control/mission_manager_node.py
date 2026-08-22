@@ -3,6 +3,7 @@
 import csv
 from datetime import datetime
 from enum import auto, Enum
+import json
 import math
 from pathlib import Path
 import time
@@ -184,6 +185,11 @@ class MissionManagerNode(Node):
             '/mission/result',
             latched_qos,
         )
+        self._readiness_publisher = self.create_publisher(
+            String,
+            '/mission/readiness',
+            latched_qos,
+        )
         self._start_service = self.create_service(
             Trigger,
             '/mission/start',
@@ -279,6 +285,12 @@ class MissionManagerNode(Node):
             self._sys_status_callback,
             10,
         )
+        self.create_subscription(
+            String,
+            '/autonomous_cleaning/state',
+            self._autonomous_state_callback,
+            latched_qos,
+        )
 
         self._arming_client = self.create_client(
             CommandBool,
@@ -345,12 +357,14 @@ class MissionManagerNode(Node):
         self._sensors_enabled: Optional[int] = None
         self._sensors_health: Optional[int] = None
         self._sys_status_time_s: Optional[float] = None
+        self._autonomous_mission_state = 'IDLE'
         self._hover_window = StableWindow(self._hover_hold_s)
 
         self._timer = self.create_timer(
             1.0 / self._fsm_rate_hz,
             self._tick,
         )
+        self.create_timer(0.5, self._publish_readiness)
         self._publish_state()
         self._publish_result('IDLE')
         self.get_logger().info(
@@ -358,6 +372,7 @@ class MissionManagerNode(Node):
         )
 
     def _declare_parameters(self) -> None:
+        self.declare_parameter('validation_approved', False)
         self.declare_parameter('hover_hold_duration', 2.0)
         self.declare_parameter('prestream_duration', 2.0)
         self.declare_parameter('sensor_timeout', 0.3)
@@ -399,6 +414,7 @@ class MissionManagerNode(Node):
         def value(name: str):
             return self.get_parameter(name).value
 
+        self._validation_approved = bool(value('validation_approved'))
         self._hover_hold_s = float(value('hover_hold_duration'))
         self._prestream_s = float(value('prestream_duration'))
         self._sensor_timeout_s = float(value('sensor_timeout'))
@@ -644,6 +660,9 @@ class MissionManagerNode(Node):
         self._sensors_health = int(message.sensors_health)
         self._sys_status_time_s = time.monotonic()
 
+    def _autonomous_state_callback(self, message: String) -> None:
+        self._autonomous_mission_state = str(message.data)
+
     def _reset_mission(self) -> None:
         self._close_log()
         self._pending_action = None
@@ -777,6 +796,8 @@ class MissionManagerNode(Node):
 
     def _preflight_failures(self, now_s: float) -> list[str]:
         failures = []
+        if not self._validation_approved:
+            failures.append('flight validation approval is locked')
         if not self._flight_data_healthy(now_s):
             failures.append('MAVROS pose or velocity telemetry unavailable')
         if not self._sensor_healthy(now_s):
@@ -802,7 +823,52 @@ class MissionManagerNode(Node):
                 ),
             )
         )
+        inactive = {'', 'IDLE', 'COMPLETE', 'ABORT'}
+        if self._autonomous_mission_state not in inactive:
+            failures.append(
+                'autonomous cleaning mission active '
+                f'({self._autonomous_mission_state})'
+            )
+        velocity_publishers = self.count_publishers(
+            '/mavros/setpoint_velocity/cmd_vel'
+        )
+        position_publishers = self.count_publishers(
+            '/mavros/setpoint_position/local'
+        )
+        if velocity_publishers != 1:
+            failures.append(
+                'expected validation controller to be the only MAVROS '
+                f'velocity publisher ({velocity_publishers} found)'
+            )
+        if position_publishers != 0:
+            failures.append(
+                'validation requires no MAVROS position publisher '
+                f'({position_publishers} found)'
+            )
         return failures
+
+    def _publish_readiness(self) -> None:
+        now_s = time.monotonic()
+        failures = self._preflight_failures(now_s)
+        inactive = self._state in {
+            MissionState.IDLE,
+            MissionState.COMPLETE,
+            MissionState.ABORT,
+        }
+        if not inactive:
+            failures.insert(0, f'validation active ({self._state.name})')
+        payload = {
+            'ready': inactive and not self._armed and not failures,
+            'failures': failures,
+            'validation_approved': self._validation_approved,
+            'profile': 'TETHERED_1M_DISTANCE',
+            'takeoff_distance_m': 1.1,
+            'target_distance_m': 1.0,
+            'minimum_battery_remaining': self._minimum_battery_remaining,
+        }
+        self._readiness_publisher.publish(
+            String(data=json.dumps(payload, separators=(',', ':')))
+        )
 
     def _inflight_status_failures(self, now_s: float) -> list[str]:
         return status_failures(

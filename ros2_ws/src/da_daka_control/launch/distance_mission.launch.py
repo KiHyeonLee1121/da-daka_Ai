@@ -4,7 +4,10 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -30,9 +33,13 @@ def generate_launch_description() -> LaunchDescription:
         'config',
         'altitude_guard.yaml',
     )
+    validation_approved = LaunchConfiguration('validation_approved')
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                'validation_approved', default_value='false'
+            ),
             Node(
                 package='da_daka_control',
                 executable='distance_filter',
@@ -57,7 +64,14 @@ def generate_launch_description() -> LaunchDescription:
                 executable='mission_manager',
                 name='mission_manager',
                 output='screen',
-                parameters=[mission_config],
+                parameters=[
+                    mission_config,
+                    {
+                        'validation_approved': ParameterValue(
+                            validation_approved, value_type=bool
+                        ),
+                    },
+                ],
             ),
             Node(
                 package='da_daka_control',

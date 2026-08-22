@@ -1,0 +1,121 @@
+name: ros2_px4
+
+# Canonical application runtime. Field approvals are supplied through
+# DA_DAKA_* environment variables and remain fail-closed by default.
+services:
+  qgc-mavros:
+    image: local/ros2-jazzy-mavros:latest
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /home/kihyeon/da-daka_Ai/ros2_ws:/workspace
+    devices:
+      - /dev/ttyACM0:/dev/ttyACM0
+    group_add:
+      - dialout
+    command:
+      - bash
+      - -lc
+      - >-
+        exec ros2 run mavros mavros_node --ros-args
+        -p fcu_url:=serial:///dev/ttyACM0:57600
+        -p gcs_url:=udp-b://10.42.0.1:14555@10.42.0.28:14550
+
+  operator-gateway:
+    image: local/ros2-jazzy-mavros:latest
+    network_mode: host
+    ipc: host
+    restart: unless-stopped
+    profiles:
+      - autonomous-cleaning
+      - distance-test
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /home/kihyeon/da-daka_Ai/ros2_ws:/workspace
+    command:
+      - ros2
+      - run
+      - da_daka_control
+      - operator_gateway
+      - --ros-args
+      - -p
+      - socket_path:=/workspace/run/operator_gateway.sock
+      - -p
+      - operator_start_enabled:=${DA_DAKA_OPERATOR_START_ENABLED:-false}
+      - -p
+      - validation_start_enabled:=${DA_DAKA_VALIDATION_START_ENABLED:-false}
+
+  distance-sensor:
+    image: local/ros2-jazzy-mavros:latest
+    network_mode: host
+    ipc: host
+    profiles:
+      - distance-test
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /home/kihyeon/da-daka_Ai/ros2_ws:/workspace
+      - /dev/serial/by-id:/dev/serial/by-id:ro
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    group_add:
+      - dialout
+    command:
+      - ros2
+      - launch
+      - da_daka_control
+      - tf_luna_serial.launch.py
+
+  distance-mission:
+    image: local/ros2-jazzy-mavros:latest
+    network_mode: host
+    ipc: host
+    profiles:
+      - distance-test
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /home/kihyeon/da-daka_Ai/ros2_ws:/workspace
+    command:
+      - ros2
+      - launch
+      - da_daka_control
+      - distance_mission.launch.py
+      - validation_approved:=${DA_DAKA_VALIDATION_APPROVED:-false}
+
+  autonomous-cleaning:
+    image: local/ros2-jazzy-mavros:latest
+    network_mode: host
+    ipc: host
+    profiles:
+      - autonomous-cleaning
+    environment:
+      ROS_DOMAIN_ID: "${ROS_DOMAIN_ID:-0}"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /home/kihyeon/da-daka_Ai/ros2_ws:/workspace
+      - /dev/serial/by-id:/dev/serial/by-id:ro
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    group_add:
+      - dialout
+    command:
+      - ros2
+      - launch
+      - da_daka_control
+      - autonomous_cleaning.launch.py
+      - configuration_approved:=${DA_DAKA_CONFIGURATION_APPROVED:-false}
+      - calibration_approved:=${DA_DAKA_CALIBRATION_APPROVED:-false}
+      - spray_backend:=${DA_DAKA_SPRAY_BACKEND:-mock}
+      - spray_output_enabled:=${DA_DAKA_SPRAY_OUTPUT_ENABLED:-false}
+      - spray_reaction_enabled:=${DA_DAKA_SPRAY_REACTION_ENABLED:-false}
+      - video_stream_enabled:=${DA_DAKA_VIDEO_STREAM_ENABLED:-false}
+      - laptop_ip:=${DA_DAKA_LAPTOP_IP:-127.0.0.1}

@@ -56,6 +56,8 @@ setup(
             'video_streamer = da_daka_control.video_streamer_node:main',
             'perception_control_sender = '
             'da_daka_control.perception_control_sender_node:main',
+            'operator_gateway = '
+            'da_daka_control.operator_gateway_node:main',
         ],
     },
 )

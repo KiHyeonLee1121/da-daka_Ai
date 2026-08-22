@@ -94,6 +94,9 @@ class AutonomousCleaningMissionNode(Node):
         self._result_publisher = self.create_publisher(
             String, '/autonomous_cleaning/result', latched_qos
         )
+        self._readiness_publisher = self.create_publisher(
+            String, '/autonomous_cleaning/readiness', latched_qos
+        )
         self._survey_publisher = self.create_publisher(
             Bool, '/panel_survey/active', latched_qos
         )
@@ -150,6 +153,7 @@ class AutonomousCleaningMissionNode(Node):
         self._publish_survey(False)
         self._publish_ai_mode('idle')
         self.create_timer(1.0 / self._tick_rate_hz, self._tick)
+        self.create_timer(0.5, self._publish_readiness)
         self.get_logger().info(
             'Autonomous cleaning mission ready; explicit start required; '
             f'configuration_approved={self._configuration_approved}'
@@ -829,20 +833,44 @@ class AutonomousCleaningMissionNode(Node):
         return self._state_timeout_s
 
     def _tick_precheck(self, now_s: float) -> None:
-        failures = status_failures(
-            now_s=now_s,
-            timeout_s=self._status_timeout_s,
-            battery_remaining=self._battery_remaining,
-            battery_time_s=self._battery_time_s,
-            minimum_battery_remaining=self._minimum_battery,
-            landed_state=self._landed_state,
-            extended_state_time_s=self._extended_time_s,
-            require_on_ground=True,
-            sensors_enabled=self._sensors_enabled,
-            sensors_health=self._sensors_health,
-            sys_status_time_s=self._sys_time_s,
-            require_enabled_sensors_healthy=self._require_health,
-            ignored_unhealthy_sensor_mask=self._ignored_health,
+        failures = self._precheck_failures(now_s)
+        if failures:
+            self._fail('preflight failed: ' + '; '.join(failures), False)
+            return
+        if self._mode != self._loiter_mode:
+            self._request_mode(self._loiter_mode)
+            return
+        stable_yaw = self._launch_yaw_stability.stable_yaw_rad
+        if stable_yaw is None:
+            return
+        self._launch_xyz = self._ground_xyz
+        self._launch_yaw_rad = stable_yaw
+        previous = self._fsm.state
+        self._fsm.precheck_complete()
+        self._on_transition(previous)
+
+    def _precheck_failures(self, now_s: float) -> list[str]:
+        failures = []
+        if not self._configuration_approved:
+            failures.append('configuration approval is locked')
+        if not self._calibration_approved:
+            failures.append('calibration approval is locked')
+        failures.extend(
+            status_failures(
+                now_s=now_s,
+                timeout_s=self._status_timeout_s,
+                battery_remaining=self._battery_remaining,
+                battery_time_s=self._battery_time_s,
+                minimum_battery_remaining=self._minimum_battery,
+                landed_state=self._landed_state,
+                extended_state_time_s=self._extended_time_s,
+                require_on_ground=True,
+                sensors_enabled=self._sensors_enabled,
+                sensors_health=self._sensors_health,
+                sys_status_time_s=self._sys_time_s,
+                require_enabled_sensors_healthy=self._require_health,
+                ignored_unhealthy_sensor_mask=self._ignored_health,
+            )
         )
         failures.extend(
             self._horizontal_estimator_failures(
@@ -899,20 +927,7 @@ class AutonomousCleaningMissionNode(Node):
             or now_s - self._spray_status_time_s > self._status_timeout_s
         ):
             failures.append('spray status is unavailable or stale')
-        if failures:
-            self._fail('preflight failed: ' + '; '.join(failures), False)
-            return
-        if self._mode != self._loiter_mode:
-            self._request_mode(self._loiter_mode)
-            return
-        stable_yaw = self._launch_yaw_stability.stable_yaw_rad
-        if stable_yaw is None:
-            return
-        self._launch_xyz = self._ground_xyz
-        self._launch_yaw_rad = stable_yaw
-        previous = self._fsm.state
-        self._fsm.precheck_complete()
-        self._on_transition(previous)
+        return failures
 
     def _tick_arming(self, _now_s: float) -> None:
         if self._armed:
@@ -1809,6 +1824,27 @@ class AutonomousCleaningMissionNode(Node):
 
     def _publish_result(self, result: str) -> None:
         self._result_publisher.publish(String(data=result))
+
+    def _publish_readiness(self) -> None:
+        now_s = time.monotonic()
+        failures = self._precheck_failures(now_s)
+        inactive = self._fsm.state in {
+            CleaningMissionState.IDLE,
+            CleaningMissionState.COMPLETE,
+            CleaningMissionState.ABORT,
+        }
+        if not inactive:
+            failures.insert(0, f'mission active ({self._fsm.state.name})')
+        payload = {
+            'ready': inactive and not failures,
+            'failures': failures,
+            'configuration_approved': self._configuration_approved,
+            'calibration_approved': self._calibration_approved,
+            'require_live_spray': self._require_live_spray,
+        }
+        self._readiness_publisher.publish(
+            String(data=json.dumps(payload, separators=(',', ':')))
+        )
 
     def _panel_result(self, progress) -> dict:
         return {

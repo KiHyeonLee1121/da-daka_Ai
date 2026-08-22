@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DA-DAKA 드론 운영 콘솔
+Comment=Raspberry Pi ROS 2 자율 청소 미션 상태 확인 및 운영
+Exec=/home/kihyeon/da-daka_Ai/tools/start_pi_operator_app.sh
+Icon=applications-engineering
+Terminal=false
+Categories=Utility;Engineering;
+StartupNotify=true
