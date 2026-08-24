@@ -3,8 +3,9 @@
 [![Full software audit](https://github.com/KiHyeonLee1121/da-daka_Ai/actions/workflows/full-software-audit.yml/badge.svg)](https://github.com/KiHyeonLee1121/da-daka_Ai/actions/workflows/full-software-audit.yml)
 
 Raspberry Pi 5가 QGroundControl(QGC)을 거치지 않고 PX4의 ARM, OFFBOARD 이동,
-분사 순서, 원점 복귀와 착륙을 소유하고, NVIDIA GPU 노트북은 영상 추론만
-담당하는 ROS 2 Jazzy 프로젝트다.
+분사 순서, 원점 복귀와 착륙을 소유하는 ROS 2 Jazzy 프로젝트다. 현재 검증 가능한
+AI 실행 경로는 NVIDIA GPU 노트북의 manifest 기반 ONNX 추론이며, Raspberry Pi 5
++ AI HAT+ 경로는 HEF 변환·정확도·실기기 검증 전까지 fail-closed다.
 
 ## 현재 상태
 
@@ -68,21 +69,22 @@ Hold/Land 수단으로 연결할 수 있다. 외부 조작으로 OFFBOARD가 해
 ```mermaid
 flowchart TB
     Camera["Pi 카메라"] --> Stream["UDP 영상 5600"]
-    Stream --> Laptop["NVIDIA 노트북 추론"]
-    Laptop -->|"추론 결과 UDP 5005"| Receiver["Pi perception receiver"]
+    Stream --> Detector["학습 기반 panel detector"]
+    Detector --> Segmenter["letterbox ROI + dirt segmenter"]
+    Segmenter -->|"protocol-v3 UDP 5005"| Receiver["Pi perception receiver"]
     Sensors["TF-Luna + MAVROS telemetry"] --> Mission["Pi 최상위 미션 FSM"]
     Receiver --> Mission
     Mission -->|"position/velocity setpoint"| MAVROS
     MAVROS --> PX4
     Mission --> Spray["MAVROS Camera Trigger"]
     Spray -->|"AUX5 3초"| Driver["DRV8876 + 솔레노이드"]
-    Mission -->|"모드/패널 UDP 5006"| Laptop
+    Mission -->|"모드/패널 UDP 5006"| Detector
 ```
 
 | 주체 | 소유하는 기능 | 소유하지 않는 기능 |
 |---|---|---|
-| Raspberry Pi 5 | 카메라 송신, LiDAR, 패널 지도/경로, 미션 FSM, MAVROS setpoint, ARM/OFFBOARD, 분사, 복귀/착륙 | CUDA 추론 |
-| NVIDIA 노트북 | 패널 검출, ONNX 오염 segmentation, 결과/heartbeat 송신 | 비행 명령, 분사 출력, 미션 순서 |
+| Raspberry Pi 5 | 카메라 송신, LiDAR, 패널 지도/경로, 미션 FSM, MAVROS setpoint, ARM/OFFBOARD, 분사, 복귀/착륙 | 현재 검증 전인 Hailo 추론 |
+| NVIDIA 노트북 | 현재 배포 backend: 학습 기반 패널 검출, ONNX 오염 segmentation, 결과/heartbeat 송신 | 비행 명령, 분사 출력, 미션 순서 |
 | PX4/Pixhawk | 자세 안정화, 모터 출력, 비행 모드/failsafe, AUX5 3초 one-shot | 패널 인식과 청소 순서 판단 |
 | QGC/조종자 | 선택적 감시, 비상 Hold/Land 또는 수동 개입 | 정상 자율 임무의 지속적인 명령 |
 
@@ -97,7 +99,10 @@ flowchart TB
 |---|---|
 | `ros2_ws/src/da_daka_control` | Pi의 센서, 측량, 경로, 정렬, 분사와 최종 미션 노드 |
 | `ros2_ws/src/da_daka_interfaces` | ROS 2 사용자 정의 메시지 |
-| `laptop_ai` | CUDA 전용 ONNX 추론 worker와 성능 측정 도구 |
+| `training` | CVAT/COCO ingest, Master Dataset, grouped split, 학습·평가·export |
+| `models` | 모델 manifest schema와 배포 bundle 계약(weight 제외) |
+| `laptop_ai` | manifest 검증 ONNX runtime, 공통 전처리/후처리와 benchmark |
+| `docs/ai_data_pipeline.md` | 라벨링부터 모델 배포·Hailo 검증까지의 실제 계약 |
 | `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
 | `docs/edge_gpu_offload_runbook.md` | Pi–노트북 GPU offload 연결, 안전 점검과 2026-08-16 현장 검증 결과 |
 | `docs/spray_reaction_feedforward.md` | 분사 반동 feedforward 통합, 실측값과 승인 절차 |
@@ -207,15 +212,17 @@ da-daka-nvidia-check
 화면에 그리는 통합 응용프로그램이다. 이 viewer 하나가 영상 수신, CUDA 추론,
 결과 전송과 시각화를 모두 담당한다.
 
-학습된 모델을 `models/dirt_segmentation.onnx`에 놓은 뒤 다음 실행기 하나로
-가상환경 생성, 패키지 설치, NVIDIA/CUDA 점검과 모니터 실행을 진행할 수 있다.
+검증된 panel detector와 dirt segmenter의 `model.json` bundle manifest를 준비한
+뒤 다음 실행기로 가상환경 생성, NVIDIA/CUDA 점검과 모니터 실행을 진행한다.
 
 ```bash
 chmod +x tools/start_laptop_ai_viewer.sh
-./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP>
+./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP> \
+  --panel-manifest <PANEL_BUNDLE/model.json> \
+  --dirt-manifest <DIRT_BUNDLE/model.json>
 ```
 
-다른 모델 위치를 사용할 때는 `--model <ONNX_PATH>`, 전체 화면은
+다른 모델 위치를 사용할 때는 `--panel-manifest`와 `--dirt-manifest`, 전체 화면은
 `--fullscreen`, 이미 설치가 끝난 뒤 빠르게 다시 실행할 때는 `--skip-install`을
 추가한다. 창에는 다음 정보가 같은 카메라 프레임 위에 표시된다.
 
@@ -236,7 +243,7 @@ ROS `video_streamer`를 단 하나만 실행한다.
 | 방향 | UDP 포트 | 데이터 |
 |---|---:|---|
 | Pi → 노트북 | 5600 | 저지연 H.264/MPEG-TS 카메라 영상 |
-| 노트북 → Pi | 5005 | protocol-v2 패널/오염 추론 결과와 heartbeat |
+| 노트북 → Pi | 5005 | protocol-v3 candidate/selected panel, component 단위 오염 결과와 heartbeat |
 | Pi → 노트북 | 5006 | `idle/survey/clean` 모드와 활성 패널 ID |
 
 양쪽 설정의 Pi IP, 노트북 IP, `source_id`가 서로 일치해야 한다. receiver는 허용
@@ -251,11 +258,13 @@ IP/source ID, session, 증가하는 sequence/frame, timestamp, 값 범위와 tim
 
 ### 1. 노트북 AI
 
-`laptop_ai/config/laptop_ai.yaml`에서 학습 모델 경로와 실제 Pi IP를 설정한다.
+`laptop_ai/config/laptop_ai.yaml`에서 두 모델 manifest 경로와 실제 Pi IP를 설정한다.
 노트북 AI는 카메라와 판정 결과를 함께 확인하는 viewer로 실행한다.
 
 ```bash
-./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP>
+./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP> \
+  --panel-manifest <PANEL_BUNDLE/model.json> \
+  --dirt-manifest <DIRT_BUNDLE/model.json>
 ```
 
 실제 모델과 영상으로 지연과 정확도를 측정할 때 사용한다.
@@ -263,6 +272,11 @@ IP/source ID, session, 증가하는 sequence/frame, timestamp, 값 범위와 tim
 ```bash
 da-daka-segmentation-benchmark \
   --config laptop_ai/config/laptop_ai.yaml --runs 200
+
+da-daka-production-benchmark \
+  --config laptop_ai/config/laptop_ai.yaml \
+  --dataset-root <MASTER_DATASET> \
+  --output <BENCHMARK_REPORT.json>
 ```
 
 Pendulum 기반 optimizer는 측정 프로파일이 없으면 observe-only다. 예시 정확도와
@@ -403,15 +417,16 @@ footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서�
 | 단절 동작 | 영상, 결과, control heartbeat를 각각 끊어 stale 추론으로 이동하거나 분사하지 않고 안전 중단하는지 확인한다. |
 | 전원/부팅 후 주소 | Pi, 노트북, AP를 여러 순서로 재부팅해도 주소와 방화벽 규칙이 유지되는지 확인한다. |
 
-### G. NVIDIA GPU와 학습 모델
+### G. AI backend와 학습 모델
 
 | 해야 할 일 | 기준 |
 |---|---|
-| GPU 환경 | `nvidia-smi`가 GPU/driver를 표시하고 `da-daka-nvidia-check`가 CUDA provider를 확인해야 한다. 실제 모델 benchmark로 CUDA session과 추론까지 이어서 검증한다. |
-| 모델 배치 | 학습·검증된 `dirt_segmentation.onnx`를 `laptop_ai.yaml`의 경로에 둔다. 저장소에는 임의 weight가 포함되어 있지 않다. |
-| 입출력 계약 | 모델이 worker의 RGB `float32 / 255.0` 입력과 일치하는지 확인한다. 출력 shape/channel, logit/probability 의미와 threshold도 설정과 일치해야 한다. |
+| CUDA 환경 | `nvidia-smi`가 GPU/driver를 표시하고 `da-daka-nvidia-check`가 CUDA provider를 확인해야 한다. 실제 모델 benchmark로 CUDA session과 추론까지 이어서 검증한다. |
+| 모델 배치 | 같은 Master Dataset version에서 학습·검증한 panel/dirt bundle의 `model.json`을 설정한다. 저장소에는 임의 weight가 포함되어 있지 않다. |
+| 입출력 계약 | runtime이 ONNX SHA-256, ONNX custom metadata, 실제 shape, manifest의 color/dtype/scale/mean/std/letterbox/activation/threshold를 일치 검사한다. 불일치는 시작 실패다. |
 | 현장 정확도 | 실제 패널, 오염 종류, 햇빛/그늘/반사/물기 데이터로 false clean과 false dirty를 따로 평가한다. 특히 오염을 깨끗하다고 판정하는 위험을 기록한다. |
 | 성능 | 실제 해상도와 모델로 warm-up 후 추론 지연, decode 지연, GPU memory, 온도/throttling을 측정한다. 전체 결과가 timeout보다 충분히 빨라야 한다. |
+| AI HAT+ | DFC parse/calibration/HEF compile, ONNX 대비 정확도와 Hailo-8L 전체 지연을 검증하고 adapter/HIL test를 추가하기 전까지 활성화하지 않는다. |
 
 모델이 없으면 통신과 ROS stack은 진단할 수 있지만 실제 오염 판단과 전체 임무
 검증은 완료할 수 없다. 임의 더미 모델로 approval gate를 통과시키지 않는다.
@@ -482,12 +497,14 @@ ROS 2 Jazzy container의 `rosdep`, `colcon build`, `colcon test`를 수행한다
 python -m compileall -q \
   actuator control sensors utils vision tests tools \
   laptop_ai/laptop_ai laptop_ai/tests \
+  training/da_daka_training training/tests \
   ros2_ws/src/da_daka_control/da_daka_control \
   ros2_ws/src/da_daka_control/launch \
   ros2_ws/src/da_daka_control/test
 
 python -m pytest -q tests
 python -m pytest -q laptop_ai/tests
+python -m pytest -q training/tests
 
 PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
   ros2_ws/src/da_daka_control/test/test_autonomous_cleaning_fsm.py \
@@ -498,12 +515,14 @@ PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
   ros2_ws/src/da_daka_control/test/test_route_planner.py \
   ros2_ws/src/da_daka_control/test/test_spray_actuator.py \
   ros2_ws/src/da_daka_control/test/test_spray_sequence.py \
+  ros2_ws/src/da_daka_control/test/test_temporal_confirmation.py \
   ros2_ws/src/da_daka_control/test/test_video_streamer.py
 ```
 
 ## 관련 문서
 
 - [최종 자율 청소 구조](docs/autonomous_cleaning_architecture.md)
+- [AI 데이터·학습·배포 파이프라인](docs/ai_data_pipeline.md)
 - [3초 분사 시퀀스 시험 절차](docs/spray_sequence_test_procedure.md)
 - [분사 반동 피드포워드 통합](docs/spray_reaction_feedforward.md)
 - [현장 좌표·카메라 진단](docs/field_diagnostics.md)

@@ -23,7 +23,9 @@
 | 다음 패널 반복 | 패널별 `clean`, `cleaning_failed`, `failure_reason`, `spray_attempts` 관리 |
 | 원점 복귀·착륙 | 저장한 launch ENU로 복귀 후 `AUTO.LAND` |
 | Pi 영상 송신 | `rpicam-vid` low-latency MPEG-TS/UDP supervisor |
-| 노트북 GPU 추론 | CUDAExecutionProvider 전용 ONNX segmentation worker |
+| 노트북 GPU 추론 | manifest 검증 panel detector + aspect-safe dirt segmentation |
+| 오염 target | component별 filter와 area/confidence/노즐 거리 기반 결정적 선택 |
+| clean 보수 판정 | 서로 다른 fresh sequence의 연속 clean confirmation |
 | Pi↔노트북 모드 동기화 | 별도 UDP control heartbeat (`idle/survey/clean`) |
 | 다중 패널 오선택 방지 | 목표 영상 중심에 가장 가까운 패널만 청소 대상으로 허용 |
 | GPU/네트워크 최적화 | Pendulum 프로파일 스케줄러·장면 변화 감지(실측 전 observe-only) |
@@ -70,9 +72,13 @@ ROS 2에서는 이것을 하나의 OS 프로세스로 합치지 않는다. 여�
 Pi Camera
   -> rpicam-vid / MPEG-TS UDP 5600
   -> Laptop OpenCV decode
-  -> panel rectangle + CUDA ONNX dirt segmentation
-  -> protocol-v2 UDP 5005
+  -> learned solar_panel ONNX detector
+  -> selected panel ROI + shared letterbox preprocess
+  -> ONNX dirt segmentation + inverse transform
+  -> connected components + deterministic target selection
+  -> protocol-v3 UDP 5005
   -> Pi perception_receiver
+  -> fresh-frame temporal confirmation
   -> survey / route / visual alignment / mission FSM
   -> MAVROS -> PX4
 
@@ -85,6 +91,28 @@ Pi requested mode + current panel ID
 자료형, 정규화 범위, timestamp 순서, 추론시간, heartbeat timeout을 검사한다.
 IP 제한은 암호학적 인증이 아니므로 전용 AP와 방화벽도 함께 사용한다. 패킷이
 끊기거나 잘못되면 이동·분사는 허용되지 않는다.
+
+`panel_visible`은 화면에 candidate가 하나라도 있는지를 뜻한다.
+`target_panel_selected`는 현재 target-center gate를 통과한 panel이 있는지를
+뜻한다. candidate는 있지만 선택 대상이 없으면 전자는 true, 후자는 false이고
+`valid=false`, `panel-not-centered`다. visual servo와 clean/dirty 판정은 선택
+target과 그 candidate ID가 있어야만 유효하다. dirt packet은 target component와 component count,
+전체/target area ratio를 전달한다.
+
+visual servo는 dirty일 때 선택 component centroid를, clean post-spray frame에서는
+선택 panel 중심을 사용한다. 따라서 오염이 제거되는 순간 target이 사라져 VERIFY가
+막히지 않으며, 검증 자체는 전체 panel ROI의 segmentation 결과를 사용한다.
+
+clean은 기본 3개의 서로 다른 fresh frame에서 연속으로 clean일 때만 확정하고
+dirty는 기본 1개 fresh frame에서 빠르게 인정한다. 동일 또는 과거 sequence는
+vote로 세지 않는다. post-spray barrier보다 과거인 frame은 정렬·검증 양쪽에서
+계속 거부한다.
+
+현재 실행 가능한 production 경로는 NVIDIA laptop CUDA다. Pi 5 + AI HAT+는
+ONNX→HEF 변환, IMX708 calibration, ONNX/HEF 정확도 동등성, Hailo-8L latency와
+adapter hardware test를 완료하기 전까지 fail-closed다. backend가 바뀌어도
+manifest/preprocess/threshold/component 계약과 Pi 비행 제어권은 바뀌지 않는다.
+데이터·학습·모델 계약은 `docs/ai_data_pipeline.md`에 정의한다.
 
 ## 실행
 
@@ -128,11 +156,11 @@ ros2 service call /autonomous_cleaning/start std_srvs/srv/Trigger "{}"
 다음은 여전히 **현물 측정 또는 학습 결과가 필요한 항목**이다. 누락된
 소프트웨어 기능이 아니라 배포 입력이며, 임의의 값을 생성하면 위험하다.
 
-1. 학습·검증된 `dirt_segmentation.onnx`
+1. 같은 Master Dataset에서 학습·검증한 panel/dirt ONNX bundle 두 개와 manifest
 2. 장착 상태에서 1 m 기준 카메라 가로·세로 지면 화각
 3. 카메라 광학 중심에서 노즐까지의 body FLU 실측 오프셋
 4. Pixhawk AUX5 Camera Trigger 설정, active polarity와 DRV8876 구동회로
-5. GTX 모델별 CUDA/ONNX Runtime 지연과 네트워크 지연 측정
+5. target backend별 ONNX Runtime 또는 HailoRT 전체 지연과 네트워크 지연 측정
 6. 실제 패널 간 이동고도에서 장애물·프로펠러·분사 안전거리 검증
 
 브랜치별 흡수·대체 내역은 `docs/branch_consolidation.md`, 현장 좌표 및 카메라

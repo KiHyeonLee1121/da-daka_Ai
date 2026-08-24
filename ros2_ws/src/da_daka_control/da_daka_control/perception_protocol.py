@@ -1,4 +1,4 @@
-"""Validation for untrusted laptop perception protocol version 2."""
+"""Validation for untrusted laptop perception protocol version 3."""
 
 from dataclasses import dataclass
 import json
@@ -6,7 +6,7 @@ import math
 from typing import Any, Optional
 
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MODES = {'idle', 'survey', 'clean'}
 
 
@@ -47,6 +47,8 @@ class PerceptionPacket:
     image_height: int
     valid: bool
     panel_visible: bool
+    target_panel_selected: bool
+    target_panel_candidate_id: int
     panels: tuple[PanelPacket, ...]
     active_panel_id: int
     dirt_found: bool
@@ -57,9 +59,14 @@ class PerceptionPacket:
     dirt_bbox_w_norm: float
     dirt_bbox_h_norm: float
     dirt_confidence: float
+    total_dirty_area_ratio: float
+    dirt_component_count: int
+    target_component_area_ratio: float
     inference_time_ms: float
     invalid_reason: str
     model_name: str
+    model_sha256: str
+    dataset_version: str
 
 
 @dataclass(frozen=True)
@@ -167,6 +174,10 @@ def _panel(raw: Any) -> PanelPacket:
         raise PerceptionProtocolError(
             'invalid_panel', 'panel dimensions/confidence must be positive'
         )
+    if panel.candidate_id <= 0:
+        raise PerceptionProtocolError(
+            'invalid_panel', 'panel candidate ID must be positive'
+        )
     return panel
 
 
@@ -214,35 +225,86 @@ def decode_perception_packet(
             'dirt_bbox_w_norm',
             'dirt_bbox_h_norm',
             'dirt_confidence',
+            'total_dirty_area_ratio',
+            'target_component_area_ratio',
         )
     }
+    dirt_component_count = _integer(raw, 'dirt_component_count')
     if dirt_found and min(
         dirt_values['dirt_bbox_w_norm'],
         dirt_values['dirt_bbox_h_norm'],
         dirt_values['dirt_confidence'],
+        dirt_values['target_component_area_ratio'],
     ) <= 0.0:
         raise PerceptionProtocolError(
             'dirt_detection', 'dirty result needs a non-empty confident box'
         )
-    if not dirt_found and any(dirt_values.values()):
+    if not dirt_found and (
+        any(dirt_values.values()) or dirt_component_count != 0
+    ):
         raise PerceptionProtocolError(
             'dirt_detection', 'clean result must zero all dirt fields'
         )
     panel_visible = _boolean(raw, 'panel_visible')
+    target_panel_selected = _boolean(raw, 'target_panel_selected')
+    target_panel_candidate_id = _integer(
+        raw, 'target_panel_candidate_id', signed=True
+    )
     valid = _boolean(raw, 'valid')
+    invalid_reason = _string(raw, 'invalid_reason', allow_empty=True)
     active_panel_id = _integer(raw, 'active_panel_id', signed=True)
+    if valid and invalid_reason:
+        raise PerceptionProtocolError(
+            'validity', 'valid packet cannot carry an invalid_reason'
+        )
+    if not valid and not invalid_reason:
+        raise PerceptionProtocolError(
+            'validity', 'invalid packet must carry an invalid_reason'
+        )
     if panel_visible != bool(panels):
         raise PerceptionProtocolError(
             'panel_visibility', 'panel_visible must match the panel array'
+        )
+    if target_panel_selected and not panel_visible:
+        raise PerceptionProtocolError(
+            'panel_selection', 'a selected target requires a visible candidate'
+        )
+    if target_panel_selected and target_panel_candidate_id not in candidate_ids:
+        raise PerceptionProtocolError(
+            'panel_selection',
+            'selected panel candidate ID must reference the panel array',
+        )
+    if not target_panel_selected and target_panel_candidate_id != -1:
+        raise PerceptionProtocolError(
+            'panel_selection',
+            'unselected panel candidate ID must be -1',
+        )
+    if mode == 'clean' and valid and not target_panel_selected:
+        raise PerceptionProtocolError(
+            'panel_selection', 'valid clean result requires a selected target panel'
         )
     if mode == 'clean' and active_panel_id <= 0:
         raise PerceptionProtocolError(
             'active_panel_id', 'clean mode requires a positive panel ID'
         )
-    if dirt_found and (mode != 'clean' or not valid or not panel_visible):
+    if dirt_found and (
+        mode != 'clean'
+        or not valid
+        or not panel_visible
+        or not target_panel_selected
+        or dirt_component_count <= 0
+    ):
         raise PerceptionProtocolError(
             'dirt_detection',
             'dirt requires valid clean mode with a visible panel',
+        )
+    if (
+        dirt_values['target_component_area_ratio']
+        > dirt_values['total_dirty_area_ratio'] + 1e-6
+    ):
+        raise PerceptionProtocolError(
+            'dirt_detection',
+            'target component area cannot exceed total dirty area',
         )
     if (
         dirt_values['dirt_bbox_x_norm'] + dirt_values['dirt_bbox_w_norm']
@@ -252,6 +314,17 @@ def decode_perception_packet(
         > 1.0 + 1e-6
     ):
         raise PerceptionProtocolError('dirt_detection', 'dirt box exceeds frame')
+    if dirt_found and not (
+        dirt_values['dirt_bbox_x_norm']
+        <= dirt_values['dirt_centroid_x_norm']
+        <= dirt_values['dirt_bbox_x_norm'] + dirt_values['dirt_bbox_w_norm']
+        and dirt_values['dirt_bbox_y_norm']
+        <= dirt_values['dirt_centroid_y_norm']
+        <= dirt_values['dirt_bbox_y_norm'] + dirt_values['dirt_bbox_h_norm']
+    ):
+        raise PerceptionProtocolError(
+            'dirt_detection', 'dirt centroid must lie inside the target box'
+        )
 
     inference_time_ms = _number(raw, 'inference_time_ms')
     if not 0.0 <= inference_time_ms <= config.maximum_inference_time_ms:
@@ -282,11 +355,23 @@ def decode_perception_packet(
         image_height=height,
         valid=valid,
         panel_visible=panel_visible,
+        target_panel_selected=target_panel_selected,
+        target_panel_candidate_id=target_panel_candidate_id,
         panels=panels,
         active_panel_id=active_panel_id,
         dirt_found=dirt_found,
+        dirt_component_count=dirt_component_count,
         inference_time_ms=inference_time_ms,
-        invalid_reason=_string(raw, 'invalid_reason', allow_empty=True),
+        invalid_reason=invalid_reason,
         model_name=_string(raw, 'model_name'),
+        model_sha256=_sha256(raw, 'model_sha256'),
+        dataset_version=_string(raw, 'dataset_version'),
         **dirt_values,
     )
+
+
+def _sha256(raw: dict[str, Any], name: str) -> str:
+    value = _string(raw, name).lower()
+    if len(value) != 64 or any(char not in '0123456789abcdef' for char in value):
+        raise PerceptionProtocolError('model_sha256', f'{name} is not SHA-256')
+    return value

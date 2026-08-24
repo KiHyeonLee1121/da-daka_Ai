@@ -24,11 +24,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install -e ./laptop_ai --no-deps
+          python -m pip install -e ./training --no-deps
       - name: Compile Python sources
         run: |
           python -m compileall -q \
             actuator control sensors utils vision tests tools \
             laptop_ai/laptop_ai laptop_ai/tests \
+            training/da_daka_training training/tests \
             ros2_ws/src/da_daka_control/da_daka_control \
             ros2_ws/src/da_daka_control/launch \
             ros2_ws/src/da_daka_control/test
@@ -49,6 +51,8 @@ jobs:
         run: python -m pytest -q tests
       - name: Laptop protocol, selection and optimizer tests
         run: python -m pytest -q laptop_ai/tests
+      - name: Dataset, preprocessing and training pipeline tests
+        run: python -m pytest -q training/tests
       - name: Pure ROS control tests
         env:
           PYTHONPATH: ros2_ws/src/da_daka_control
@@ -63,6 +67,7 @@ jobs:
             ros2_ws/src/da_daka_control/test/test_spray_actuator.py \
             ros2_ws/src/da_daka_control/test/test_spray_reaction.py \
             ros2_ws/src/da_daka_control/test/test_spray_sequence.py \
+            ros2_ws/src/da_daka_control/test/test_temporal_confirmation.py \
             ros2_ws/src/da_daka_control/test/test_video_streamer.py
 
   ros2-jazzy:

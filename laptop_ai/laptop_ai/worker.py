@@ -8,7 +8,8 @@ import uuid
 import av
 
 from laptop_ai.control_protocol import ControlReceiver
-from laptop_ai.panel_detector import PanelDetector, select_panel_nearest_target
+from laptop_ai.model_contract import verify_pipeline_dataset_identity
+from laptop_ai.panel_detector import OnnxPanelDetector, select_panel_nearest_target
 from laptop_ai.result_protocol import encode_result, ZERO_DIRT
 from laptop_ai.runtime_tuning import (
     RuntimeTuning,
@@ -65,6 +66,9 @@ def translate_dirt_to_frame(dirt, panel, frame_width, frame_height):
         'dirt_bbox_w_norm': dirt.bbox_w_norm * panel.width / frame_width,
         'dirt_bbox_h_norm': dirt.bbox_h_norm * panel.height / frame_height,
         'dirt_confidence': dirt.confidence,
+        'total_dirty_area_ratio': dirt.total_dirty_area_ratio,
+        'dirt_component_count': dirt.component_count,
+        'target_component_area_ratio': dirt.target_component_area_ratio,
     }
 
 
@@ -79,7 +83,7 @@ class LaptopAiWorker:
 
         network = config['network']
         video = config['video']
-        panel = config['panel_detector']
+        panel = config['panel_model']
         model = config['dirt_model']
         self.source_id = str(network['source_id'])
         self.pi_ip = str(network['pi_ip'])
@@ -97,12 +101,10 @@ class LaptopAiWorker:
         )
         self.result_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.video = MpegTsVideoReceiver(int(video['port']))
-        self.panel_detector = PanelDetector(
-            minimum_area_ratio=float(panel['minimum_area_ratio']),
-            maximum_area_ratio=float(panel['maximum_area_ratio']),
-            minimum_aspect_ratio=float(panel['minimum_aspect_ratio']),
-            maximum_aspect_ratio=float(panel['maximum_aspect_ratio']),
-            maximum_panels=int(panel['maximum_panels']),
+        self.panel_detector = OnnxPanelDetector(
+            str(panel['manifest']),
+            backend=str(panel.get('backend', 'cuda')),
+            performance=config.get('performance'),
         )
         selection = config.get('target_selection', {})
         self.target_x_norm = float(selection.get('target_x_norm', 0.5))
@@ -111,13 +113,13 @@ class LaptopAiWorker:
             selection.get('maximum_center_distance_norm', 0.45)
         )
         self.dirt_detector = OnnxDirtSegmenter(
-            str(model['path']),
-            input_width=int(model['input_width']),
-            input_height=int(model['input_height']),
-            threshold=float(model['threshold']),
-            minimum_area_ratio=float(model['minimum_area_ratio']),
-            output_channel=int(model.get('output_channel', 0)),
+            str(model['manifest']),
+            backend=str(model.get('backend', 'cuda')),
             performance=config.get('performance'),
+        )
+        verify_pipeline_dataset_identity(
+            self.panel_detector.manifest,
+            self.dirt_detector.manifest,
         )
         self.optimizer = None
         self.scene_change = None
@@ -165,6 +167,7 @@ class LaptopAiWorker:
                     selected=None,
                     valid=False,
                     panel_visible=False,
+                    target_panel_selected=False,
                     dirt_found=False,
                     dirt_values=dict(ZERO_DIRT),
                     inference_ms=0.0,
@@ -219,7 +222,11 @@ class LaptopAiWorker:
                 )
         dirt_found = False
         dirt_values = dict(ZERO_DIRT)
-        panel_visible = bool(panels) if mode == 'survey' else selected is not None
+        panel_visible = bool(panels)
+        target_panel_selected = selected is not None
+        target_panel_candidate_id = (
+            selected.candidate_id if selected is not None else -1
+        )
         valid = True
         invalid_reason = ''
         if mode == 'clean' and selected is not None:
@@ -227,7 +234,19 @@ class LaptopAiWorker:
                 selected.y:selected.y + selected.height,
                 selected.x:selected.x + selected.width,
             ]
-            dirt = self.dirt_detector.detect(roi)
+            roi_target_x = max(
+                0.0,
+                min(1.0, (self.target_x_norm * width - selected.x) / selected.width),
+            )
+            roi_target_y = max(
+                0.0,
+                min(1.0, (self.target_y_norm * height - selected.y) / selected.height),
+            )
+            dirt = self.dirt_detector.detect(
+                roi,
+                target_x_norm=roi_target_x,
+                target_y_norm=roi_target_y,
+            )
             if dirt is not None:
                 dirt_found = True
                 dirt_values = translate_dirt_to_frame(
@@ -248,6 +267,8 @@ class LaptopAiWorker:
             inference_ns=inference_ns,
             valid=valid,
             panel_visible=panel_visible,
+            target_panel_selected=target_panel_selected,
+            target_panel_candidate_id=target_panel_candidate_id,
             panels=normalized_panels,
             active_panel_id=panel_id,
             dirt_found=dirt_found,
@@ -264,6 +285,7 @@ class LaptopAiWorker:
             selected=selected,
             valid=valid,
             panel_visible=panel_visible,
+            target_panel_selected=target_panel_selected,
             dirt_found=dirt_found,
             dirt_values=dirt_values,
             inference_ms=inference_ms,
@@ -281,6 +303,7 @@ class LaptopAiWorker:
         selected,
         valid,
         panel_visible,
+        target_panel_selected,
         dirt_found,
         dirt_values,
         inference_ms,
@@ -298,6 +321,7 @@ class LaptopAiWorker:
             control_connected=control_connected,
             valid=valid,
             panel_visible=panel_visible,
+            target_panel_selected=target_panel_selected,
             dirt_found=dirt_found,
             inference_ms=inference_ms,
             invalid_reason=invalid_reason,
@@ -327,6 +351,8 @@ class LaptopAiWorker:
             inference_ns=now_ns,
             valid=False,
             panel_visible=False,
+            target_panel_selected=False,
+            target_panel_candidate_id=-1,
             panels=[],
             active_panel_id=panel_id,
             dirt_found=False,
@@ -345,6 +371,8 @@ class LaptopAiWorker:
         inference_ns,
         valid,
         panel_visible,
+        target_panel_selected,
+        target_panel_candidate_id,
         panels,
         active_panel_id,
         dirt_found,
@@ -367,12 +395,16 @@ class LaptopAiWorker:
             image_height=height,
             valid=valid,
             panel_visible=panel_visible,
+            target_panel_selected=target_panel_selected,
+            target_panel_candidate_id=target_panel_candidate_id,
             panels=panels,
             active_panel_id=active_panel_id,
             dirt_found=dirt_found,
             inference_time_ms=inference_ms,
             invalid_reason=invalid_reason,
             model_name=self.dirt_detector.model_name,
+            model_sha256=self.dirt_detector.model_sha256,
+            dataset_version=self.dirt_detector.dataset_version,
             **dirt_values,
         )
         self.result_socket.sendto(payload, self.pi_address)

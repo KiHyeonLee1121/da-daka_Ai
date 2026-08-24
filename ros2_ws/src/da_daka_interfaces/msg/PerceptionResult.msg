@@ -7,6 +7,8 @@ uint64 sequence
 string mode
 bool valid
 bool panel_visible
+bool target_panel_selected
+int32 target_panel_candidate_id
 PanelDetection[] panels
 int32 active_panel_id
 bool dirt_found
@@ -17,7 +19,12 @@ float32 dirt_bbox_y_norm
 float32 dirt_bbox_w_norm
 float32 dirt_bbox_h_norm
 float32 dirt_confidence
+float32 total_dirty_area_ratio
+uint32 dirt_component_count
+float32 target_component_area_ratio
 float32 inference_time_ms
 float32 result_age_s
 string invalid_reason
 string model_name
+string model_sha256
+string dataset_version

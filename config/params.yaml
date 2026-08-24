@@ -1,3 +1,6 @@
+# LEGACY BENCH-ONLY configuration for root main.py. This is not the ROS 2
+# production perception contract. Production model manifests are configured in
+# laptop_ai/config/laptop_ai.yaml; Hailo remains fail-closed pending HEF/HIL validation.
 camera:
   source: 0
   width: 640

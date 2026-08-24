@@ -10,12 +10,11 @@ network:
 video:
   port: 5600
 
-panel_detector:
-  minimum_area_ratio: 0.01
-  maximum_area_ratio: 0.90
-  minimum_aspect_ratio: 1.0
-  maximum_aspect_ratio: 4.0
-  maximum_panels: 32
+panel_model:
+  # Production requires a learned detector bundle. The classical contour
+  # detector remains in panel_detector.py only for offline diagnostics.
+  manifest: "models/panel_detection_v1/model.json"
+  backend: "cuda"
 
 target_selection:
   # The active random-layout panel should be closest to this image point after
@@ -25,14 +24,10 @@ target_selection:
   maximum_center_distance_norm: 0.45
 
 dirt_model:
-  # The repository intentionally does not fabricate weights. Put the trained
-  # binary segmentation ONNX file here and validate its output contract.
-  path: "models/dirt_segmentation.onnx"
-  input_width: 512
-  input_height: 512
-  output_channel: 0
-  threshold: 0.50
-  minimum_area_ratio: 0.001
+  # Shape, activation, threshold and preprocessing come only from this
+  # validated bundle manifest; they are not guessed or overridden here.
+  manifest: "models/dirt_segmentation_v1/model.json"
+  backend: "cuda"
 
 performance:
   opencv_num_threads: 2

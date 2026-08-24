@@ -20,7 +20,8 @@ def load_config(
     path: str | Path,
     *,
     pi_ip: str | None = None,
-    model_path: str | None = None,
+    dirt_manifest_path: str | None = None,
+    panel_manifest_path: str | None = None,
 ) -> dict:
     """Load the worker configuration with optional safe CLI overrides."""
     config_path = Path(path).expanduser().resolve()
@@ -30,8 +31,14 @@ def load_config(
         raise ValueError('laptop AI config must be a YAML mapping')
     if pi_ip:
         config['network']['pi_ip'] = pi_ip
-    if model_path:
-        config['dirt_model']['path'] = str(Path(model_path).expanduser())
+    if dirt_manifest_path:
+        config['dirt_model']['manifest'] = str(
+            Path(dirt_manifest_path).expanduser()
+        )
+    if panel_manifest_path:
+        config['panel_model']['manifest'] = str(
+            Path(panel_manifest_path).expanduser()
+        )
     return config
 
 
@@ -45,7 +52,14 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument('--config', default=str(default_config_path()))
     result.add_argument('--pi-ip', help='override network.pi_ip without editing YAML')
-    result.add_argument('--model', help='override dirt_model.path without editing YAML')
+    result.add_argument(
+        '--dirt-manifest',
+        help='override dirt_model.manifest without editing YAML',
+    )
+    result.add_argument(
+        '--panel-manifest',
+        help='override panel_model.manifest without editing YAML',
+    )
     result.add_argument(
         '--fullscreen',
         action=argparse.BooleanOptionalAction,
@@ -67,7 +81,8 @@ def main() -> int:
         config = load_config(
             arguments.config,
             pi_ip=arguments.pi_ip,
-            model_path=arguments.model,
+            dirt_manifest_path=arguments.dirt_manifest,
+            panel_manifest_path=arguments.panel_manifest,
         )
         viewer_config = config.get('viewer', {})
         fullscreen = (

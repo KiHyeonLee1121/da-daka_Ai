@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://da-daka.local/schemas/dataset-manifest-v1.json",
+  "title": "DA-DAKA dataset manifest v1",
+  "type": "object",
+  "required": [
+    "manifest_version",
+    "dataset_version",
+    "dataset_fingerprint",
+    "created_at_utc",
+    "git_commit",
+    "sources",
+    "split_policy",
+    "counts",
+    "category_contract"
+  ],
+  "properties": {
+    "manifest_version": {"const": 1},
+    "dataset_version": {"type": "string", "minLength": 1},
+    "dataset_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "created_at_utc": {"type": "string", "format": "date-time"},
+    "git_commit": {"type": "string", "minLength": 1},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["source_task", "source_path", "source_sha256", "source_type", "image_count"]
+      }
+    },
+    "split_policy": {
+      "type": "object",
+      "required": ["unit_priority", "seed", "ratios"]
+    },
+    "counts": {"type": "object"},
+    "category_contract": {
+      "type": "object",
+      "required": ["solar_panel", "dirt"],
+      "properties": {
+        "solar_panel": {"const": 1},
+        "dirt": {"const": 2}
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -5,7 +5,7 @@ import json
 from laptop_ai.result_protocol import encode_result, ZERO_DIRT
 
 
-def test_result_encoder_emits_protocol_v2_and_no_nan():
+def test_result_encoder_emits_protocol_v3_and_no_nan():
     payload = json.loads(
         encode_result(
             source_id='laptop-ai-01',
@@ -20,15 +20,19 @@ def test_result_encoder_emits_protocol_v2_and_no_nan():
             image_height=720,
             valid=False,
             panel_visible=False,
+            target_panel_selected=False,
+            target_panel_candidate_id=-1,
             panels=[],
             active_panel_id=-1,
             dirt_found=False,
             inference_time_ms=0.0,
             invalid_reason='idle',
             model_name='model.onnx',
+            model_sha256='0' * 64,
+            dataset_version='test-v1',
             **ZERO_DIRT,
         )
     )
-    assert payload['protocol_version'] == 2
+    assert payload['protocol_version'] == 3
     assert payload['mode'] == 'idle'
     assert not payload['dirt_found']

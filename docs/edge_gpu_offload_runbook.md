@@ -4,11 +4,14 @@
 
 DA-DAKA는 인터넷 GPU 서비스를 사용하지 않는다. 폐쇄된 현장 LAN에서
 Raspberry Pi 5가 노트북의 NVIDIA GPU를 영상 추론 자원으로만 빌린다.
+이 문서는 현재 구현된 CUDA offload 운영 절차다. AI HAT+는
+`docs/ai_data_pipeline.md`의 HEF/정확도/실기기 검증을 통과하기 전까지 대체
+production backend가 아니다.
 
 | 장치 | 담당 | 금지되는 역할 |
 |---|---|---|
-| Raspberry Pi 5 | 카메라 송신, 센서, 지도·경로, 미션 FSM, MAVROS setpoint, 분사, 복귀·착륙 | CUDA 추론 |
-| NVIDIA 노트북 | 영상 decode, 패널 검출, ONNX 오염 segmentation, 추론 결과 송신 | MAVLink/MAVROS, ARM, mode, setpoint, Pixhawk 분사 명령 |
+| Raspberry Pi 5 | 카메라 송신, 센서, 지도·경로, 미션 FSM, MAVROS setpoint, 분사, 복귀·착륙 | 현재 검증 전인 Hailo 추론 |
+| NVIDIA 노트북 | 영상 decode, 학습 기반 패널 검출, manifest ONNX 오염 segmentation, 추론 결과 송신 | MAVLink/MAVROS, ARM, mode, setpoint, Pixhawk 분사 명령 |
 
 GPU 연결 시험은 `configuration_approved=false`,
 `calibration_approved=false`, `spray_backend=mock`,
@@ -21,7 +24,7 @@ GPU 연결 시험은 `configuration_approved=false`,
 |---|---:|---|
 | Pi → 노트북 | 5600 | H.264/MPEG-TS 영상 |
 | Pi → 노트북 | 5006 | protocol-v1 `idle/survey/clean`, 활성 패널 ID, heartbeat |
-| 노트북 → Pi | 5005 | protocol-v2 패널·오염 결과와 inference time |
+| 노트북 → Pi | 5005 | protocol-v3 panel candidate/selected, component 오염 결과와 inference time |
 
 기본 ID는 Pi `pi5-01`, 노트북 `laptop-ai-01`이다. 양쪽 receiver는 상대 IP,
 source ID, session, 증가하는 sequence/frame, 값 범위와 timeout을 검사한다.
@@ -56,7 +59,7 @@ ps ax -o pid=,args= | grep -E \
   'rpicam|video_streamer|perception_receiver|perception_control_sender'
 ```
 
-노트북의 `laptop_ai/config/laptop_ai.yaml`에는 실제 Pi IP와 검증된 모델 경로를
+노트북의 `laptop_ai/config/laptop_ai.yaml`에는 실제 Pi IP와 검증된 model manifest를
 넣는다. 임의의 placeholder 모델로 비행·분사 승인을 열지 않는다.
 
 ```yaml
@@ -66,6 +69,12 @@ network:
   control_port: 5006
 video:
   port: 5600
+panel_model:
+  manifest: "<PANEL_BUNDLE/model.json>"
+  backend: "cuda"
+dirt_model:
+  manifest: "<DIRT_BUNDLE/model.json>"
+  backend: "cuda"
 ```
 
 ## 노트북 worker 시작
@@ -73,9 +82,12 @@ video:
 ```bash
 cd <DA_DAKA_REPOSITORY>
 source .venv/bin/activate
-test -f models/dirt_segmentation.onnx
+test -f <PANEL_BUNDLE/model.json>
+test -f <DIRT_BUNDLE/model.json>
 da-daka-nvidia-check
-da-daka-laptop-ai --config laptop_ai/config/laptop_ai.yaml
+./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP> \
+  --panel-manifest <PANEL_BUNDLE/model.json> \
+  --dirt-manifest <DIRT_BUNDLE/model.json> --skip-install
 ```
 
 `da-daka-nvidia-check`와 실제 ONNX 연산에서 `CUDAExecutionProvider`를 확인한다.
@@ -194,7 +206,7 @@ ros2 topic hz /ai/perception
 - `source_id=laptop-ai-01`이고 session ID가 연결 중 일관된다.
 - Pi 통신 프로세스만 재시작해도 새 control session으로 자동 복구된다.
 - `idle`에서는 `valid=false`와 fail-closed 사유가 반환된다.
-- `survey`에서는 GPU inference time이 포함된 protocol-v2 결과가 반환된다.
+- `survey`에서는 GPU inference time이 포함된 protocol-v3 결과가 반환된다.
 - `clean` 시험은 1 이상의 panel ID를 사용한다.
 
 비행 없이 모드만 확인할 때:
@@ -209,8 +221,10 @@ ros2 topic pub --once /ai/requested_mode std_msgs/msg/String '{data: clean}'
 ros2 topic pub --once /ai/requested_mode std_msgs/msg/String '{data: idle}'
 ```
 
-카메라에 목표 패널이 없을 때 `panel-not-found`, `panel_visible=false`,
-`valid=false`가 반환되는 것은 정상적인 안전 동작이다.
+카메라에 panel candidate가 없을 때 `panel-not-found`, `panel_visible=false`,
+`target_panel_selected=false`, `valid=false`가 반환되는 것은 정상이다. candidate가
+있지만 center gate를 통과하지 못하면 `panel_visible=true`,
+`target_panel_selected=false`, `panel-not-centered`여야 한다.
 
 ## 2026-08-16 임시 추론서버 연결 결과
 
@@ -221,7 +235,7 @@ ros2 topic pub --once /ai/requested_mode std_msgs/msg/String '{data: idle}'
 |---|---|
 | Pi / 노트북 | `10.205.180.181` / `10.205.180.126` (2026-08-21 DHCP 주소) |
 | 카메라 | Pi IMX708, 1280×720, 20 fps, 4 Mbit/s |
-| protocol-v2 초기 상태 | `accepted=155`, `rejected=0`, `/ai/health=true` |
+| 당시 protocol-v2 초기 상태(역사적 측정) | `accepted=155`, `rejected=0`, `/ai/health=true` |
 | idle 수신률 | 약 3.5 Hz |
 | clean 수신률 | 약 19.5 Hz |
 | 관측 inference time | survey 약 4.7–4.8 ms, clean 약 5.2 ms |
@@ -238,7 +252,7 @@ GPU 연결 성공만으로 자율 비행이나 분사를 승인하지 않는다.
 완료하고 비행 기록에 평균/p95/p99와 시험 조건을 남긴다.
 
 - 전용 AP와 고정/예약 IP에서 장시간 packet loss, RTT, jitter 측정
-- 실제 학습 모델 SHA-256, 입출력 shape, CUDA provider와 정확도 검증
+- panel/dirt manifest와 ONNX SHA-256/custom metadata/입출력 shape, CUDA provider 검증
 - 실제 영상에서 decode·inference end-to-end latency와 GPU 온도/throttling 측정
 - control heartbeat, 영상, 결과 스트림을 각각 끊었을 때 fail-closed 검증
 - 카메라·LiDAR·노즐 실측 보정, Pixhawk AUX5 bench test, SITL과 단계별 실비행 승인

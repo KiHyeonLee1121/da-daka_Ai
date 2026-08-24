@@ -6,15 +6,18 @@ from vision.dirt_detector_base import BBox, BaseDirtDetector, DirtDetectionResul
 
 
 class HailoDirtDetector(BaseDirtDetector):
-    """Reject the unavailable AI HAT path instead of silently changing models."""
+    """Reject an uncompiled/unvalidated HEF instead of silently changing models."""
 
     def __init__(self, detector_config: dict[str, Any]):
         model_path = detector_config.get("model_path")
         raise RuntimeError(
-            "The Hailo/AI-HAT backend is unavailable in the final system. "
-            "Run the CUDA ONNX laptop worker instead; "
+            "The Hailo/AI-HAT backend is not yet compiled and hardware-validated. "
+            "Use the manifest-validated CUDA ONNX laptop worker until an equivalent "
+            "HEF passes calibration-set accuracy and Pi latency gates; "
             f"configured HEF={model_path!r}."
         )
 
     def detect(self, frame: Any, roi: BBox | None = None) -> DirtDetectionResult:
-        raise RuntimeError("Hailo detection is unavailable; use laptop CUDA inference")
+        raise RuntimeError(
+            "Hailo detection is fail-closed until a validated HEF adapter is deployed"
+        )

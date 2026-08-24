@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://da-daka.local/schemas/model-manifest-v1.json",
+  "title": "DA-DAKA model manifest v1",
+  "type": "object",
+  "required": [
+    "manifest_version",
+    "task",
+    "model_file",
+    "model_sha256",
+    "checkpoint_sha256",
+    "input_width",
+    "input_height",
+    "resize",
+    "padding_value",
+    "color",
+    "dtype",
+    "channel_order",
+    "scale",
+    "mean",
+    "std",
+    "output_activation",
+    "output_layout",
+    "output_channel",
+    "output_names",
+    "threshold",
+    "dataset_version",
+    "dataset_fingerprint",
+    "git_commit"
+  ],
+  "properties": {
+    "manifest_version": {"const": 1},
+    "task": {"enum": ["panel_detection", "dirt_segmentation"]},
+    "model_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
+    "model_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "checkpoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "input_width": {"type": "integer", "minimum": 1},
+    "input_height": {"type": "integer", "minimum": 1},
+    "resize": {"const": "letterbox"},
+    "padding_value": {"type": "integer", "minimum": 0, "maximum": 255},
+    "color": {"enum": ["RGB", "BGR"]},
+    "dtype": {"const": "float32"},
+    "channel_order": {"const": "NCHW"},
+    "scale": {"type": "number", "exclusiveMinimum": 0},
+    "mean": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}},
+    "std": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number", "exclusiveMinimum": 0}},
+    "output_activation": {"enum": ["logits", "probability", "none"]},
+    "output_layout": {"enum": ["NCHW", "NHW", "HW"]},
+    "output_channel": {"type": "integer", "minimum": 0},
+    "output_names": {"type": "array", "items": {"type": "string"}},
+    "output_shape": {"type": "array", "items": {}},
+    "output_shapes": {
+      "type": "object",
+      "additionalProperties": {"type": "array", "items": {}}
+    },
+    "box_coordinates": {"enum": ["input_pixels", "input_normalized"]},
+    "panel_label_id": {"type": "integer", "minimum": 0},
+    "maximum_detections": {"type": "integer", "minimum": 1},
+    "nms_iou_threshold": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1},
+    "minimum_component_area": {"type": "integer", "minimum": 0},
+    "minimum_component_area_ratio": {"type": "number", "minimum": 0, "exclusiveMaximum": 1},
+    "target_selection": {
+      "type": "object",
+      "required": ["area_weight", "confidence_weight", "target_distance_weight"],
+      "properties": {
+        "area_weight": {"type": "number", "minimum": 0},
+        "confidence_weight": {"type": "number", "minimum": 0},
+        "target_distance_weight": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+    "dataset_version": {"type": "string", "minLength": 1},
+    "dataset_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "git_commit": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"task": {"const": "dirt_segmentation"}}},
+      "then": {
+        "required": [
+          "output_shape",
+          "minimum_component_area",
+          "minimum_component_area_ratio",
+          "target_selection"
+        ],
+        "properties": {
+          "output_activation": {"enum": ["logits", "probability"]},
+          "threshold": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+        }
+      },
+      "else": {
+        "required": [
+          "output_shapes",
+          "box_coordinates",
+          "panel_label_id",
+          "maximum_detections",
+          "nms_iou_threshold"
+        ],
+        "properties": {
+          "output_activation": {"const": "none"}
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

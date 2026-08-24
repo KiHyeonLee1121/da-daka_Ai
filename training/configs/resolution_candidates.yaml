@@ -1,0 +1,6 @@
+candidates:
+  - {width: 512, height: 512}
+  - {width: 640, height: 384}
+  - {width: 640, height: 320}
+  - {width: 640, height: 640}
+  - {width: 768, height: 448}

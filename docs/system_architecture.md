@@ -155,7 +155,8 @@ QGC/PX4에 있다. RC 입력은 이 운용 구조에서 사용하지 않는다.
 ## Raspberry Pi 배포 전 남은 현물 입력·검증
 
 - Pixhawk serial 장치/baud와 `mavlink-router` endpoint 확정
-- 학습·검증된 오염 세그멘테이션 ONNX 모델 배치
+- 같은 Master Dataset에서 학습·검증된 panel detector/dirt segmenter bundle 배치
+- 모델별 manifest의 SHA·letterbox·activation·threshold 계약 검증
 - TF-Luna/카메라/노즐 장착 변환과 AUX5/DRV8876 회로 실측
 - 노트북 GPU 지연과 Pi↔노트북 가용 대역폭 프로파일 측정
 - PX4 OFFBOARD-loss/data-link-loss 설정, SITL 및 단계별 실기체 시험

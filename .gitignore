@@ -6,6 +6,7 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+.venv-*/
 venv/
 
 # ROS 2 / colcon
@@ -24,7 +25,38 @@ logs/*.jsonl
 logs/*.ulg
 logs/*.tlog
 logs/*.mp4
-models/*.onnx
+*.onnx
+models/**/*.hef
+models/**/checkpoint.pt
+
+# CVAT sources and generated training data
+data/raw/
+data/cvat_backups/
+data/coco_exports/
+data/generated/
+**/cvat_backups/
+**/coco_exports/
+datasets/
+training/runs/
+training/checkpoints/
+training/outputs/
+**/tensorboard/
+**/wandb/
+wandb/
+*.har
+*.hef
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+!training/tests/fixtures/**/*.json
+!training/tests/fixtures/**/*.png
+
+# Generated AI diagnostics
+reports/generated/
+visualizations/generated/
+logs/laptop_ai_viewer/
+:memory:.ses
 
 # Local configuration and editor files
 .env

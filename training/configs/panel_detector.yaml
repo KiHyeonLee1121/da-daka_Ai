@@ -1,0 +1,38 @@
+dataset_root: "/path/to/generated/da-daka-master"
+output_dir: "/path/to/runs/panel_detector_v1"
+device: "cuda"
+seed: 20260825
+deterministic: true
+pretrained: true
+epochs: 30
+batch_size: 2
+workers: 2
+learning_rate: 0.005
+weight_decay: 0.0005
+evaluation_score_threshold: 0.05
+
+preprocess:
+  input_width: 640   # candidate only; select from validation benchmark
+  input_height: 384
+  padding_value: 114
+  color: "RGB"
+  scale: 0.00392156862745098
+  mean: [0.0, 0.0, 0.0]
+  std: [1.0, 1.0, 1.0]
+
+augmentation:
+  brightness_probability: 0.4
+  brightness_limit: 0.18
+  color_probability: 0.25
+  shadow_probability: 0.30
+  specular_probability: 0.15
+  motion_blur_probability: 0.10
+  defocus_blur_probability: 0.10
+  noise_probability: 0.20
+  noise_sigma_max: 10.0
+  compression_probability: 0.20
+  jpeg_quality_min: 65
+
+postprocess:
+  maximum_detections: 32
+  nms_iou_threshold: 0.50

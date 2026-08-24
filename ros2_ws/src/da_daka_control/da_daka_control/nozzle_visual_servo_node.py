@@ -9,6 +9,7 @@ from da_daka_control.nozzle_alignment import (
     compute_image_velocity,
     nozzle_image_target,
     quaternion_yaw_rad,
+    visual_observation_target,
 )
 from da_daka_control.panel_mapping import camera_surface_distance, CameraGroundModel
 from da_daka_interfaces.msg import PerceptionResult
@@ -45,6 +46,7 @@ class NozzleVisualServoNode(Node):
         self._last_aligned: Optional[bool] = None
         self._last_valid: Optional[bool] = None
         self._last_visible: Optional[bool] = None
+        self._last_selected: Optional[bool] = None
 
         latched_qos = QoSProfile(
             depth=1,
@@ -64,6 +66,9 @@ class NozzleVisualServoNode(Node):
         )
         self._visible_publisher = self.create_publisher(
             Bool, self._visible_topic, latched_qos
+        )
+        self._selected_publisher = self.create_publisher(
+            Bool, self._selected_topic, latched_qos
         )
         self.create_subscription(
             PerceptionResult,
@@ -90,7 +95,7 @@ class NozzleVisualServoNode(Node):
             qos_profile_sensor_data,
         )
         self._timer = self.create_timer(1.0 / self._rate_hz, self._tick)
-        self._publish_states(False, False, False)
+        self._publish_states(False, False, False, False)
 
     def _declare_parameters(self) -> None:
         self.declare_parameter('result_topic', '/ai/perception')
@@ -101,6 +106,9 @@ class NozzleVisualServoNode(Node):
         self.declare_parameter('aligned_topic', '/visual_servo/aligned')
         self.declare_parameter('valid_topic', '/visual_servo/target_valid')
         self.declare_parameter('visible_topic', '/visual_servo/panel_visible')
+        self.declare_parameter(
+            'selected_topic', '/visual_servo/target_panel_selected'
+        )
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout_s', 0.5)
@@ -132,6 +140,7 @@ class NozzleVisualServoNode(Node):
         self._aligned_topic = str(value('aligned_topic'))
         self._valid_topic = str(value('valid_topic'))
         self._visible_topic = str(value('visible_topic'))
+        self._selected_topic = str(value('selected_topic'))
         self._frame_id = str(value('frame_id'))
         self._rate_hz = float(value('rate_hz'))
         self._input_timeout_s = float(value('input_timeout_s'))
@@ -216,18 +225,49 @@ class NozzleVisualServoNode(Node):
             and now_s - self._pose_time_s <= self._input_timeout_s
         )
         visible = bool(fresh and self._result.panel_visible)
+        selected = bool(fresh and self._result.target_panel_selected)
+        selected_panel = None
+        if selected:
+            selected_panel = next(
+                (
+                    panel for panel in self._result.panels
+                    if int(panel.candidate_id)
+                    == int(self._result.target_panel_candidate_id)
+                ),
+                None,
+            )
+        try:
+            observation = visual_observation_target(
+                dirt_found=bool(fresh and self._result.dirt_found),
+                dirt_centroid=(
+                    (
+                        float(self._result.dirt_centroid_x_norm),
+                        float(self._result.dirt_centroid_y_norm),
+                    )
+                    if self._result is not None else (0.0, 0.0)
+                ),
+                selected_panel_centroid=(
+                    (
+                        float(selected_panel.center_x_norm),
+                        float(selected_panel.center_y_norm),
+                    )
+                    if selected_panel is not None else None
+                ),
+            )
+        except ValueError:
+            observation = None
         target_valid = bool(
-            visible
+            selected
+            and selected_panel is not None
             and self._result.valid
-            and self._result.dirt_found
-            and 0.0 <= float(self._result.dirt_centroid_x_norm) <= 1.0
-            and 0.0 <= float(self._result.dirt_centroid_y_norm) <= 1.0
+            and observation is not None
         )
         command = TwistStamped()
         command.header.stamp = self.get_clock().now().to_msg()
         command.header.frame_id = self._frame_id
         aligned = False
         if target_valid:
+            observed_x_norm, observed_y_norm = observation
             try:
                 target = nozzle_image_target(
                     self._camera,
@@ -241,12 +281,8 @@ class NozzleVisualServoNode(Node):
                 )
                 if target.inside_safe_frame:
                     body_forward_mps, body_left_mps, aligned = compute_image_velocity(
-                        observed_x_norm=float(
-                            self._result.dirt_centroid_x_norm
-                        ),
-                        observed_y_norm=float(
-                            self._result.dirt_centroid_y_norm
-                        ),
+                        observed_x_norm=observed_x_norm,
+                        observed_y_norm=observed_y_norm,
                         target_x_norm=target.x_norm,
                         target_y_norm=target.y_norm,
                         deadband_norm=self._deadband_norm,
@@ -273,13 +309,14 @@ class NozzleVisualServoNode(Node):
                     throttle_duration_sec=2.0,
                 )
         self._command_publisher.publish(command)
-        self._publish_states(aligned, target_valid, visible)
+        self._publish_states(aligned, target_valid, visible, selected)
 
     def _publish_states(
         self,
         aligned: bool,
         valid: bool,
         visible: bool,
+        selected: bool,
     ) -> None:
         if aligned != self._last_aligned:
             self._aligned_publisher.publish(Bool(data=aligned))
@@ -290,6 +327,9 @@ class NozzleVisualServoNode(Node):
         if visible != self._last_visible:
             self._visible_publisher.publish(Bool(data=visible))
             self._last_visible = visible
+        if selected != self._last_selected:
+            self._selected_publisher.publish(Bool(data=selected))
+            self._last_selected = selected
 
 
 def main(args=None) -> None:

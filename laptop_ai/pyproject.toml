@@ -26,6 +26,8 @@ tools = [
 da-daka-laptop-ai-viewer = "laptop_ai.viewer_app:main"
 da-daka-nvidia-check = "laptop_ai.nvidia_check:main"
 da-daka-segmentation-benchmark = "laptop_ai.segmentation_benchmark:main"
+da-daka-production-benchmark = "laptop_ai.production_benchmark:main"
+da-daka-verify-model = "laptop_ai.verify_model:main"
 da-daka-joint-optimizer = "laptop_ai.optimizer_cli:main"
 da-daka-convert-onnx-fp16 = "laptop_ai.convert_onnx_fp16:main"
 

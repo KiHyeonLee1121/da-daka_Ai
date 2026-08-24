@@ -5,7 +5,8 @@ repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 venv="${DA_DAKA_VENV:-${repository}/.venv}"
 config="${DA_DAKA_CONFIG:-${repository}/laptop_ai/config/laptop_ai.yaml}"
 pi_ip="${PI_IP:-}"
-model="${DA_DAKA_MODEL:-${repository}/models/dirt_segmentation.onnx}"
+dirt_manifest="${DA_DAKA_DIRT_MANIFEST:-${repository}/models/dirt_segmentation_v1/model.json}"
+panel_manifest="${DA_DAKA_PANEL_MANIFEST:-${repository}/models/panel_detection_v1/model.json}"
 skip_install=false
 fullscreen=false
 
@@ -15,7 +16,8 @@ Usage: tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP> [options]
 
 Options:
   --pi-ip ADDRESS       Raspberry Pi field-network address (required)
-  --model PATH          trained dirt segmentation ONNX model
+  --dirt-manifest PATH  trained dirt model bundle manifest
+  --panel-manifest PATH trained panel detector bundle manifest
   --config PATH         laptop AI YAML configuration
   --fullscreen          start the monitor in fullscreen mode
   --skip-install        reuse an already prepared virtual environment
@@ -32,8 +34,12 @@ while [[ $# -gt 0 ]]; do
             pi_ip="${2:?--pi-ip requires an address}"
             shift 2
             ;;
-        --model)
-            model="${2:?--model requires a path}"
+        --dirt-manifest)
+            dirt_manifest="${2:?--dirt-manifest requires a path}"
+            shift 2
+            ;;
+        --panel-manifest)
+            panel_manifest="${2:?--panel-manifest requires a path}"
             shift 2
             ;;
         --config)
@@ -68,9 +74,12 @@ if [[ ! -f "${config}" ]]; then
     echo "ERROR: configuration not found: ${config}" >&2
     exit 2
 fi
-if [[ ! -f "${model}" ]]; then
-    echo "ERROR: trained ONNX model not found: ${model}" >&2
-    echo "Place dirt_segmentation.onnx in ${repository}/models or use --model." >&2
+if [[ ! -f "${dirt_manifest}" ]]; then
+    echo "ERROR: dirt model manifest not found: ${dirt_manifest}" >&2
+    exit 2
+fi
+if [[ ! -f "${panel_manifest}" ]]; then
+    echo "ERROR: panel model manifest not found: ${panel_manifest}" >&2
     exit 2
 fi
 
@@ -94,7 +103,8 @@ arguments=(
     -m laptop_ai.viewer_app
     --config "${config}"
     --pi-ip "${pi_ip}"
-    --model "${model}"
+    --dirt-manifest "${dirt_manifest}"
+    --panel-manifest "${panel_manifest}"
 )
 if [[ "${fullscreen}" == true ]]; then
     arguments+=(--fullscreen)
@@ -104,4 +114,3 @@ echo "Starting DA-DAKA monitor. Waiting for Pi camera on UDP 5600."
 echo "Keys: Q/ESC quit, S screenshot, F fullscreen"
 cd "${repository}"
 exec "${venv}/bin/python" "${arguments[@]}"
-

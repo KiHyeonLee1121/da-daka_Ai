@@ -7,6 +7,7 @@ from da_daka_control.nozzle_alignment import (
     compute_image_velocity,
     nozzle_image_target,
     quaternion_yaw_rad,
+    visual_observation_target,
 )
 from da_daka_control.panel_mapping import CameraGroundModel
 import pytest
@@ -102,3 +103,19 @@ def test_quaternion_yaw_recovers_vehicle_heading():
     half_yaw = math.radians(90.0) / 2.0
     yaw = quaternion_yaw_rad(0.0, 0.0, math.sin(half_yaw), math.cos(half_yaw))
     assert yaw == pytest.approx(math.pi / 2.0)
+
+
+def test_dirty_visual_servo_uses_selected_component_centroid():
+    assert visual_observation_target(
+        dirt_found=True,
+        dirt_centroid=(0.2, 0.3),
+        selected_panel_centroid=(0.5, 0.5),
+    ) == (0.2, 0.3)
+
+
+def test_clean_post_spray_visual_servo_keeps_selected_panel_center():
+    assert visual_observation_target(
+        dirt_found=False,
+        dirt_centroid=(0.0, 0.0),
+        selected_panel_centroid=(0.45, 0.55),
+    ) == (0.45, 0.55)

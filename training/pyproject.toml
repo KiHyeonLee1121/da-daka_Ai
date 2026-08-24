@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "da-daka-training"
+version = "0.1.0"
+description = "Reproducible CVAT/COCO training pipeline for DA-DAKA perception"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26,<3",
+  "opencv-python>=4.8,<5",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+train = [
+  "torch>=2.3,<3",
+  "torchvision>=0.18,<1",
+  "tensorboard>=2.16,<3",
+  "onnx>=1.16,<2",
+]
+test = ["pytest>=7.4"]
+
+[project.scripts]
+da-daka-dataset = "da_daka_training.cli:main"
+da-daka-train-panel = "da_daka_training.train_panel:main"
+da-daka-train-dirt = "da_daka_training.train_dirt:main"
+da-daka-export-model = "da_daka_training.export_model:main"
+da-daka-evaluate-model = "da_daka_training.evaluate_model:main"
+da-daka-threshold-sweep = "da_daka_training.threshold_sweep:main"
+da-daka-analyze-dataset = "da_daka_training.analysis:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["da_daka_training*"]

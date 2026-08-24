@@ -1,0 +1,46 @@
+dataset_root: "/path/to/generated/da-daka-master"
+output_dir: "/path/to/runs/dirt_segmenter_v1"
+device: "cuda"
+seed: 20260825
+deterministic: true
+pretrained: true
+epochs: 30
+batch_size: 4
+workers: 2
+learning_rate: 0.0001
+weight_decay: 0.0001
+evaluation_threshold_placeholder: 0.50
+
+preprocess:
+  input_width: 640   # candidate only; select from validation benchmark
+  input_height: 384
+  padding_value: 114
+  color: "RGB"
+  scale: 0.00392156862745098
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+augmentation:
+  brightness_probability: 0.4
+  brightness_limit: 0.18
+  color_probability: 0.25
+  shadow_probability: 0.30
+  specular_probability: 0.15
+  motion_blur_probability: 0.10
+  defocus_blur_probability: 0.10
+  noise_probability: 0.20
+  noise_sigma_max: 10.0
+  compression_probability: 0.20
+  jpeg_quality_min: 65
+  perspective_probability: 0.20
+  perspective_limit: 0.035
+  scale_probability: 0.15
+  scale_limit: 0.08
+
+postprocess:
+  minimum_component_area: 8       # placeholder until validation sweep
+  minimum_component_area_ratio: 0.0001
+  target_selection:
+    area_weight: 0.45
+    confidence_weight: 0.35
+    target_distance_weight: 0.20

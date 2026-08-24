@@ -1,4 +1,4 @@
-"""Classical multi-panel rectangle detector for the 3 m survey image."""
+"""Learned production and classical diagnostic panel detectors."""
 
 from dataclasses import dataclass
 import math
@@ -63,7 +63,7 @@ def select_panel_nearest_target(
 
 
 class PanelDetector:
-    """Find high-area quadrilateral candidates without assuming their layout."""
+    """Classical contour detector retained for diagnostics and comparison."""
 
     def __init__(
         self,
@@ -129,3 +129,171 @@ class PanelDetector:
             for index, (_area, x, y, box_width, box_height, confidence)
             in enumerate(candidates[:self.maximum_panels], 1)
         ]
+
+
+class OnnxPanelDetector:
+    """Manifest-validated learned solar-panel detector for production use."""
+
+    def __init__(
+        self,
+        manifest_path: str,
+        *,
+        backend: str = 'cuda',
+        performance: dict | None = None,
+    ) -> None:
+        import onnxruntime as ort
+
+        from laptop_ai.model_contract import ModelContractError, ModelManifest
+        from laptop_ai.runtime_tuning import (
+            RuntimeTuning,
+            configure_cuda_environment,
+            create_session_options,
+            cuda_provider,
+        )
+
+        self.manifest = ModelManifest.load(
+            manifest_path,
+            expected_task='panel_detection',
+        )
+        output_names = self.manifest.raw.get('output_names')
+        if output_names != ['boxes', 'scores', 'labels']:
+            raise ModelContractError(
+                'panel output_names must be ["boxes", "scores", "labels"]'
+            )
+        coordinates = self.manifest.raw['box_coordinates']
+        if coordinates not in {'input_pixels', 'input_normalized'}:
+            raise ModelContractError(
+                'box_coordinates must be input_pixels or input_normalized'
+            )
+        self.box_coordinates = coordinates
+        self.panel_label_id = int(self.manifest.raw['panel_label_id'])
+        self.maximum_panels = int(self.manifest.raw['maximum_detections'])
+        self.nms_iou_threshold = float(
+            self.manifest.raw['nms_iou_threshold']
+        )
+        if self.panel_label_id < 0 or self.maximum_panels <= 0:
+            raise ModelContractError('invalid panel detector label/count contract')
+        if not 0.0 < self.nms_iou_threshold < 1.0:
+            raise ModelContractError('nms_iou_threshold must be within (0, 1)')
+
+        backend = backend.lower()
+        if backend not in {'cuda', 'cpu'}:
+            raise ValueError('ONNX backend must be cuda or cpu')
+        tuning = RuntimeTuning.from_mapping(performance)
+        available = ort.get_available_providers()
+        if backend == 'cuda':
+            if 'CUDAExecutionProvider' not in available:
+                raise RuntimeError(
+                    'panel detector requires CUDAExecutionProvider; '
+                    f'providers={available}'
+                )
+            configure_cuda_environment(tuning)
+            providers = [cuda_provider(tuning), 'CPUExecutionProvider']
+        else:
+            providers = ['CPUExecutionProvider']
+        self.session = ort.InferenceSession(
+            str(self.manifest.model_path),
+            sess_options=create_session_options(ort, tuning),
+            providers=providers,
+        )
+        expected_provider = (
+            'CUDAExecutionProvider' if backend == 'cuda'
+            else 'CPUExecutionProvider'
+        )
+        if self.session.get_providers()[0] != expected_provider:
+            raise RuntimeError('ONNX panel detector did not activate requested backend')
+        self.manifest.verify_onnx_session(self.session)
+        self.input_name = self.session.get_inputs()[0].name
+        self.model_name = self.manifest.model_file
+
+    def detect(self, frame: np.ndarray) -> list[PanelRectangle]:
+        """Return model boxes mapped exactly back to full-frame pixels."""
+        from laptop_ai.preprocessing import preprocess_bgr
+
+        if frame is None or frame.ndim != 3 or frame.size == 0:
+            raise ValueError('BGR frame is required')
+        tensor, transform = preprocess_bgr(frame, self.manifest)
+        output = self.session.run(
+            ['boxes', 'scores', 'labels'],
+            {self.input_name: tensor},
+        )
+        boxes = np.asarray(output[0], dtype=np.float32)
+        scores = np.asarray(output[1], dtype=np.float32).reshape(-1)
+        labels = np.asarray(output[2]).reshape(-1)
+        if boxes.ndim == 3 and boxes.shape[0] == 1:
+            boxes = boxes[0]
+        if boxes.ndim != 2 or boxes.shape[1] != 4:
+            raise RuntimeError(f'panel boxes must have shape [N,4], got {boxes.shape}')
+        if not len(boxes) == len(scores) == len(labels):
+            raise RuntimeError('panel output lengths do not match')
+        candidates: list[tuple[float, tuple[float, float, float, float]]] = []
+        for box, score, label in zip(boxes, scores, labels):
+            confidence = float(score)
+            if int(label) != self.panel_label_id or confidence < self.manifest.threshold:
+                continue
+            x1, y1, x2, y2 = (float(value) for value in box)
+            if self.box_coordinates == 'input_normalized':
+                x1 *= self.manifest.input_width
+                x2 *= self.manifest.input_width
+                y1 *= self.manifest.input_height
+                y2 *= self.manifest.input_height
+            x, y, width, height = transform.to_original_bbox(
+                (x1, y1, x2 - x1, y2 - y1)
+            )
+            if min(width, height) <= 1.0:
+                continue
+            candidates.append((confidence, (x, y, width, height)))
+        kept = _nms(candidates, self.nms_iou_threshold)
+        kept.sort(key=lambda item: (-item[0], item[1][0], item[1][1]))
+        result = []
+        frame_height, frame_width = frame.shape[:2]
+        for index, (confidence, box) in enumerate(
+            kept[:self.maximum_panels],
+            1,
+        ):
+            x, y, width, height = box
+            left = max(0, min(frame_width - 1, int(round(x))))
+            top = max(0, min(frame_height - 1, int(round(y))))
+            right = max(left + 1, min(frame_width, int(round(x + width))))
+            bottom = max(top + 1, min(frame_height, int(round(y + height))))
+            result.append(
+                PanelRectangle(
+                    index,
+                    left,
+                    top,
+                    right - left,
+                    bottom - top,
+                    confidence,
+                )
+            )
+        return result
+
+
+def _nms(
+    candidates: list[tuple[float, tuple[float, float, float, float]]],
+    iou_threshold: float,
+) -> list[tuple[float, tuple[float, float, float, float]]]:
+    """Small deterministic NMS used for the explicit three-output contract."""
+    ordered = sorted(candidates, key=lambda item: -item[0])
+    kept = []
+    while ordered:
+        chosen = ordered.pop(0)
+        kept.append(chosen)
+        ordered = [
+            item for item in ordered
+            if _bbox_iou(chosen[1], item[1]) <= iou_threshold
+        ]
+    return kept
+
+
+def _bbox_iou(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> float:
+    lx, ly, lw, lh = left
+    rx, ry, rw, rh = right
+    intersection_width = max(0.0, min(lx + lw, rx + rw) - max(lx, rx))
+    intersection_height = max(0.0, min(ly + lh, ry + rh) - max(ly, ry))
+    intersection = intersection_width * intersection_height
+    union = lw * lh + rw * rh - intersection
+    return intersection / union if union > 0.0 else 0.0

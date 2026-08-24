@@ -1,0 +1,24 @@
+dataset_version: null  # null -> deterministic da-daka-<fingerprint>
+output_dir: "/path/to/generated/da-daka-master"
+duplicate_policy: "error"  # use keep_first only after reviewing duplicate report
+
+category_aliases:
+  solar panel: solar_panel
+
+sources:
+  - path: "/path/to/task_a_backup.zip"
+    type: "cvat_backup"
+    source_task: "capture_session_a"
+    capture_session: "session_a"
+  - path: "/path/to/task_b_coco.zip"
+    type: "coco"
+    source_task: "capture_session_b"
+    capture_session: "session_b"
+  - path: "/path/to/task_c_coco.zip"
+    type: "coco"
+    source_task: "capture_session_c"
+    capture_session: "session_c"
+
+split:
+  seed: "da-daka-split-v1"
+  ratios: [0.70, 0.15, 0.15]

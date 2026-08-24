@@ -24,6 +24,7 @@ class VisualizationState:
     control_connected: bool
     valid: bool
     panel_visible: bool
+    target_panel_selected: bool
     dirt_found: bool
     inference_ms: float
     invalid_reason: str
@@ -170,9 +171,10 @@ def render_overlay(
             thickness=3,
         )
         confidence = float(state.dirt_values.get('dirt_confidence', 0.0))
+        component_count = int(state.dirt_values.get('dirt_component_count', 0))
         cv2.putText(
             output,
-            f'DIRT {confidence:.2f}',
+            f'DIRT {confidence:.2f}  COMPONENTS {component_count}',
             (first[0], max(header_height + 20, first[1] - 8)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,
@@ -190,9 +192,12 @@ def render_overlay(
     elif state.dirt_found:
         status = 'DIRT DETECTED'
         status_color = (60, 80, 245)
-    elif state.panel_visible:
+    elif state.target_panel_selected:
         status = 'PANEL DETECTED - NO DIRT'
         status_color = (70, 210, 110)
+    elif state.panel_visible:
+        status = 'PANEL CANDIDATE - TARGET NOT SELECTED'
+        status_color = (90, 210, 240)
     else:
         status = 'NO PANEL DETECTED'
         status_color = (90, 210, 240)
@@ -298,4 +303,3 @@ class OpenCvViewer:
         except cv2.error:
             pass
         self._window_created = False
-

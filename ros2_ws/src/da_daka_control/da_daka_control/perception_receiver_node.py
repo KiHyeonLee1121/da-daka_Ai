@@ -67,7 +67,7 @@ class PerceptionReceiverNode(Node):
         self._publish_health(False)
         self._publish_state('NO_RESULT')
         self.get_logger().info(
-            f'Perception UDP v2 listening on {self._bind_address}:{self._port}; '
+            f'Perception UDP v3 listening on {self._bind_address}:{self._port}; '
             f'allowed source={self._allowed_source_id}; '
             f'allowed IP={self._allowed_remote_ip or "any"}'
         )
@@ -175,6 +175,8 @@ class PerceptionReceiverNode(Node):
         message.mode = packet.mode
         message.valid = packet.valid
         message.panel_visible = packet.panel_visible
+        message.target_panel_selected = packet.target_panel_selected
+        message.target_panel_candidate_id = packet.target_panel_candidate_id
         message.active_panel_id = packet.active_panel_id
         message.dirt_found = packet.dirt_found
         message.dirt_centroid_x_norm = packet.dirt_centroid_x_norm
@@ -184,10 +186,15 @@ class PerceptionReceiverNode(Node):
         message.dirt_bbox_w_norm = packet.dirt_bbox_w_norm
         message.dirt_bbox_h_norm = packet.dirt_bbox_h_norm
         message.dirt_confidence = packet.dirt_confidence
+        message.total_dirty_area_ratio = packet.total_dirty_area_ratio
+        message.dirt_component_count = packet.dirt_component_count
+        message.target_component_area_ratio = packet.target_component_area_ratio
         message.inference_time_ms = packet.inference_time_ms
         message.result_age_s = 0.0
         message.invalid_reason = packet.invalid_reason
         message.model_name = packet.model_name
+        message.model_sha256 = packet.model_sha256
+        message.dataset_version = packet.dataset_version
         for packet_panel in packet.panels:
             panel = PanelDetection()
             panel.candidate_id = packet_panel.candidate_id

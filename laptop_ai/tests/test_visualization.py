@@ -12,6 +12,7 @@ def state(**overrides):
         'control_connected': True,
         'valid': True,
         'panel_visible': True,
+        'target_panel_selected': True,
         'dirt_found': True,
         'inference_ms': 7.5,
         'invalid_reason': '',
@@ -89,4 +90,3 @@ def test_render_overlay_rejects_non_bgr_input():
         assert 'BGR' in str(exc)
     else:
         raise AssertionError('grayscale frame should be rejected')
-

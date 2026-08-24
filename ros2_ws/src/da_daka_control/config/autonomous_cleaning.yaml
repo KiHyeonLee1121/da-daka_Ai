@@ -41,6 +41,10 @@ autonomous_cleaning_mission:
 
     prestream_s: 2.0
     perception_stable_s: 0.5
+    # A dirty result is acted on quickly; declaring clean requires distinct,
+    # monotonically fresh inference results to reduce false-clean risk.
+    clean_confirmation_frames: 3
+    dirty_confirmation_frames: 1
     alignment_stable_s: 0.7
     yaw_tolerance_deg: 5.0
     launch_yaw_stable_s: 1.0

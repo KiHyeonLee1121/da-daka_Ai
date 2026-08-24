@@ -1,4 +1,4 @@
-"""Benchmark the production binary-segmentation CUDA path."""
+"""Zero-image microbenchmark for the binary-segmentation backend only."""
 
 import argparse
 import json
@@ -8,8 +8,6 @@ import time
 
 import numpy as np
 import yaml
-
-from laptop_ai.onnx_dirt_detector import OnnxDirtSegmenter
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -26,22 +24,24 @@ def main() -> None:
     parser.add_argument('--runs', type=int, default=100)
     parser.add_argument('--output')
     args = parser.parse_args()
+    from laptop_ai.onnx_dirt_detector import OnnxDirtSegmenter
+
     if args.runs <= 0:
         raise ValueError('--runs must be positive')
     with Path(args.config).open('r', encoding='utf-8') as stream:
         config = yaml.safe_load(stream)
     model = config['dirt_model']
     detector = OnnxDirtSegmenter(
-        str(model['path']),
-        input_width=int(model['input_width']),
-        input_height=int(model['input_height']),
-        threshold=float(model['threshold']),
-        minimum_area_ratio=float(model['minimum_area_ratio']),
-        output_channel=int(model.get('output_channel', 0)),
+        str(model['manifest']),
+        backend=str(model.get('backend', 'cuda')),
         performance=config.get('performance'),
     )
     frame = np.zeros(
-        (int(model['input_height']), int(model['input_width']), 3),
+        (
+            detector.manifest.input_height,
+            detector.manifest.input_width,
+            3,
+        ),
         dtype=np.uint8,
     )
     timings = []
@@ -51,6 +51,7 @@ def main() -> None:
         timings.append((time.perf_counter() - started) * 1000.0)
     report = {
         'runs': args.runs,
+        'benchmark_type': 'zero_image_microbenchmark',
         'model': detector.model_name,
         'mean_ms': statistics.fmean(timings),
         'p50_ms': percentile(timings, 0.50),

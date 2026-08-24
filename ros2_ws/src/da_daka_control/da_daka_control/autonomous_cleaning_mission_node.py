@@ -27,6 +27,9 @@ from da_daka_control.spray_sequence import (
     PerceptionBarrier,
     SprayCycleTracker,
 )
+from da_daka_control.temporal_confirmation import (
+    TemporalCleanlinessConfirmation,
+)
 from da_daka_interfaces.msg import PanelMap, PerceptionResult
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import EstimatorStatus, ExtendedState, State, SysStatus
@@ -77,6 +80,10 @@ class AutonomousCleaningMissionNode(Node):
             self._launch_yaw_max_deviation_rad,
         )
         self._perception_window = StableWindow(self._perception_stable_s)
+        self._cleanliness_confirmation = TemporalCleanlinessConfirmation(
+            clean_consecutive_frames=self._clean_confirmation_frames,
+            dirty_consecutive_frames=self._dirty_confirmation_frames,
+        )
         self._alignment_window = StableWindow(self._alignment_stable_s)
         self._survey_home_window = StableWindow(self._survey_home_stable_s)
         self._survey_home_speed_filter = TimeWindowMedian(
@@ -192,6 +199,8 @@ class AutonomousCleaningMissionNode(Node):
         self.declare_parameter('reacquire_period_s', 5.0)
         self.declare_parameter('prestream_s', 2.0)
         self.declare_parameter('perception_stable_s', 0.5)
+        self.declare_parameter('clean_confirmation_frames', 3)
+        self.declare_parameter('dirty_confirmation_frames', 1)
         self.declare_parameter('alignment_stable_s', 0.7)
         self.declare_parameter('yaw_tolerance_deg', 5.0)
         self.declare_parameter('launch_yaw_stable_s', 1.0)
@@ -264,6 +273,12 @@ class AutonomousCleaningMissionNode(Node):
         self._reacquire_period_s = float(value('reacquire_period_s'))
         self._prestream_s = float(value('prestream_s'))
         self._perception_stable_s = float(value('perception_stable_s'))
+        self._clean_confirmation_frames = int(
+            value('clean_confirmation_frames')
+        )
+        self._dirty_confirmation_frames = int(
+            value('dirty_confirmation_frames')
+        )
         self._alignment_stable_s = float(value('alignment_stable_s'))
         self._yaw_tolerance_rad = math.radians(float(value('yaw_tolerance_deg')))
         self._launch_yaw_stable_s = float(value('launch_yaw_stable_s'))
@@ -335,6 +350,11 @@ class AutonomousCleaningMissionNode(Node):
             )
         if self._maximum_survey_panels <= 0 or self._max_spray_attempts <= 0:
             raise ValueError('panel/attempt limits must be positive')
+        if min(
+            self._clean_confirmation_frames,
+            self._dirty_confirmation_frames,
+        ) <= 0:
+            raise ValueError('clean/dirty confirmation frames must be positive')
         if self._max_spray_attempts != 3:
             raise ValueError('max_spray_attempts must be exactly 3')
         if not math.isclose(self._spray_duration_s, 3.0, abs_tol=1e-9):
@@ -408,6 +428,12 @@ class AutonomousCleaningMissionNode(Node):
             Bool,
             '/visual_servo/panel_visible',
             self._panel_visible_cb,
+            latched_qos,
+        )
+        self.create_subscription(
+            Bool,
+            '/visual_servo/target_panel_selected',
+            self._target_panel_selected_cb,
             latched_qos,
         )
         self.create_subscription(
@@ -499,6 +525,7 @@ class AutonomousCleaningMissionNode(Node):
         self._visual_aligned = False
         self._visual_valid = False
         self._panel_visible = False
+        self._target_panel_selected = False
         self._distance_enabled = False
         self._distance_reached = False
         self._takeoff_enabled = False
@@ -639,6 +666,9 @@ class AutonomousCleaningMissionNode(Node):
     def _panel_visible_cb(self, message: Bool) -> None:
         self._panel_visible = bool(message.data)
 
+    def _target_panel_selected_cb(self, message: Bool) -> None:
+        self._target_panel_selected = bool(message.data)
+
     def _distance_enabled_cb(self, message: Bool) -> None:
         self._distance_enabled = bool(message.data)
 
@@ -736,6 +766,7 @@ class AutonomousCleaningMissionNode(Node):
         self._abort_land_requested = False
         self._arrival.reset()
         self._perception_window.reset()
+        self._cleanliness_confirmation.reset()
         self._alignment_window.reset()
         self._survey_home_window.reset()
         self._survey_home_speed_filter.reset()
@@ -1120,7 +1151,10 @@ class AutonomousCleaningMissionNode(Node):
             panel.target.north_m + radius * math.sin(angle),
         )
         self._advance_and_publish_position(target_xyz, now_s)
-        valid = self._fresh_clean_perception(now_s) and self._panel_visible
+        valid = (
+            self._fresh_clean_perception(now_s)
+            and self._target_panel_selected
+        )
         if self._perception_window.update(valid, now_s):
             previous = self._fsm.state
             self._fsm.panel_reacquired()
@@ -1137,12 +1171,15 @@ class AutonomousCleaningMissionNode(Node):
         self._publish_position_hold(self._panel_target_xyz(
             panel.target.east_m, panel.target.north_m
         ))
-        if self._clean_packet_fresh(now_s) and not self._panel_visible:
+        if self._clean_packet_fresh(now_s) and not self._target_panel_selected:
             previous = self._fsm.state
             self._fsm.target_lost()
             self._on_transition(previous)
             return
-        valid = self._fresh_clean_perception(now_s) and self._panel_visible
+        valid = (
+            self._fresh_clean_perception(now_s)
+            and self._target_panel_selected
+        )
         if not valid:
             self._perception_window.reset()
             return
@@ -1153,7 +1190,9 @@ class AutonomousCleaningMissionNode(Node):
             return
         if not self._perception_window.update(True, now_s):
             return
-        dirt_found = bool(self._perception.dirt_found)
+        dirt_found = self._confirmed_cleanliness()
+        if dirt_found is None:
+            return
         previous = self._fsm.state
         self._fsm.cleanliness_result(dirt_found)
         self._on_transition(previous)
@@ -1164,7 +1203,10 @@ class AutonomousCleaningMissionNode(Node):
         if self._mode != 'OFFBOARD':
             self._fail(f'PX4/QGC mode override during alignment: {self._mode}', False)
             return
-        if not self._fresh_clean_perception(now_s) or not self._panel_visible:
+        if (
+            not self._fresh_clean_perception(now_s)
+            or not self._target_panel_selected
+        ):
             previous = self._fsm.state
             self._fsm.target_lost()
             self._on_transition(previous)
@@ -1232,7 +1274,7 @@ class AutonomousCleaningMissionNode(Node):
         if not fresh:
             self._alignment_window.reset()
             return
-        if not self._panel_visible:
+        if not self._target_panel_selected:
             previous = self._fsm.state
             self._fsm.target_lost()
             self._on_transition(previous)
@@ -1252,7 +1294,7 @@ class AutonomousCleaningMissionNode(Node):
         if not fresh:
             self._perception_window.reset()
             return
-        if not self._panel_visible:
+        if not self._target_panel_selected:
             previous = self._fsm.state
             self._fsm.target_lost()
             self._on_transition(previous)
@@ -1262,7 +1304,11 @@ class AutonomousCleaningMissionNode(Node):
             return
         if not self._perception_window.update(True, now_s):
             return
-        dirt_found = bool(self._perception.dirt_found)
+        dirt_found = self._confirmed_cleanliness(
+            barrier=self._post_spray_barrier
+        )
+        if dirt_found is None:
+            return
         previous = self._fsm.state
         self._fsm.cleanliness_result(dirt_found)
         self._on_transition(previous)
@@ -1489,12 +1535,29 @@ class AutonomousCleaningMissionNode(Node):
         return bool(
             self._clean_packet_fresh(now_s)
             and self._perception.valid
+            and self._perception.target_panel_selected
             and (
                 int(self._perception.active_panel_id) < 0
                 or panel is None
                 or int(self._perception.active_panel_id)
                 == panel.target.panel_id
             )
+        )
+
+    def _confirmed_cleanliness(
+        self,
+        *,
+        barrier: Optional[PerceptionBarrier] = None,
+    ) -> Optional[bool]:
+        """Confirm from distinct inference identities only."""
+        if self._perception is None:
+            return None
+        return self._cleanliness_confirmation.observe(
+            session_id=str(self._perception.session_id),
+            sequence=int(self._perception.sequence),
+            frame_id=int(self._perception.frame_id),
+            dirt_found=bool(self._perception.dirt_found),
+            barrier=barrier,
         )
 
     def _fresh_post_spray_perception(self, now_s: float) -> bool:
@@ -1579,6 +1642,7 @@ class AutonomousCleaningMissionNode(Node):
         self._state_started_s = now_s
         self._stage_started_s = now_s
         self._perception_window.reset()
+        self._cleanliness_confirmation.reset()
         self._alignment_window.reset()
         self._arrival.reset()
         if state == CleaningMissionState.SPRAY:

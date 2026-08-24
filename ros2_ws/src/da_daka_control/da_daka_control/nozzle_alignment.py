@@ -15,6 +15,21 @@ class NozzleImageTarget:
     inside_safe_frame: bool
 
 
+def visual_observation_target(
+    *,
+    dirt_found: bool,
+    dirt_centroid: tuple[float, float],
+    selected_panel_centroid: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    """Use dirt target when present, otherwise keep a selected clean panel."""
+    if selected_panel_centroid is None:
+        return None
+    value = dirt_centroid if dirt_found else selected_panel_centroid
+    if not all(math.isfinite(item) and 0.0 <= item <= 1.0 for item in value):
+        raise ValueError('visual observation coordinates must be normalized')
+    return float(value[0]), float(value[1])
+
+
 def quaternion_yaw_rad(
     x: float,
     y: float,
