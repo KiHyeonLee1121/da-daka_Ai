@@ -25,6 +25,11 @@ AI 실행 경로는 NVIDIA GPU 노트북의 manifest 기반 ONNX 추론이며, R
 - ROS 2 `spray_controller`의 live backend는 MAVROS를 통해 Pixhawk 4의
   `Camera_Trigger` one-shot을 요청한다. 실제 출력은 AUX5가 DRV8876
   `EN/IN1`을 구동하며 Raspberry Pi GPIO는 사용하지 않는다.
+- CVAT/COCO ingest부터 Master Dataset, grouped split, panel/dirt 학습·평가,
+  ONNX export와 runtime contract까지의 소프트웨어 경로는 구현되어 있다.
+- 실제 프로젝트 데이터로 만든 Master Dataset과 학습 weight는 저장소에 없으며,
+  validation으로 input size·threshold를 결정하고 실기체 검증하기 전에는
+  자율분사 준비 완료 상태가 아니다.
 
 ## 최종 임무
 
@@ -123,6 +128,194 @@ offload runbook을 따른다.
 동시에 실행하면 안 된다. 과거 `panel_mission`과 `panel_distance_mission`도
 회귀시험 대상으로만 유지하며 실제 임무는 `autonomous_cleaning.launch.py`만
 사용한다.
+
+## AI 데이터·모델 파이프라인
+
+```mermaid
+flowchart TB
+    Source["CVAT Backup / COCO"] --> Master["검증된 Master Dataset"]
+    Master --> Split["그룹 단위 train/validation/test"]
+    Split --> Train["Panel detector + Dirt segmenter"]
+    Train --> Export["평가 + ONNX/model manifest"]
+    Export --> Runtime["Production perception runtime"]
+```
+
+### 라벨 계약
+
+| Category | CVAT shape | 규칙 |
+|---|---|---|
+| `solar_panel` | Rectangle | 모든 이미지에 하나 이상 존재. 프레임에서 잘린 panel은 보이는 범위의 bbox로 표시한다. |
+| `dirt` | Polygon | clean 이미지에는 없고, dirty 이미지에는 하나 이상 존재할 수 있다. 한 panel 안의 여러 polygon을 지원한다. |
+
+숫자 category ID는 입력 source마다 달라도 된다. Dataset Builder가 이름을 먼저
+정규화한 뒤 최종 Master COCO에서 `solar_panel=1`, `dirt=2`로 다시 할당한다.
+원본 CVAT Backup은 읽기만 하며 수정하거나 덮어쓰지 않는다.
+
+### Master Dataset 생성
+
+이미지가 포함된 CVAT Task Backup ZIP/디렉터리와 COCO 1.0 ZIP/디렉터리를 여러
+source로 받을 수 있다.
+
+```bash
+python -m pip install -e ./laptop_ai
+python -m pip install -e './training[train,test]'
+
+cp training/configs/dataset.example.yaml /tmp/da-daka-dataset.yaml
+# sources, capture/session group, output_dir를 실제 값으로 수정
+da-daka-dataset --config /tmp/da-daka-dataset.yaml
+```
+
+Builder는 다음을 확인한다.
+
+- 누락 이미지, orphan annotation, 알 수 없는 category
+- 실제 이미지 크기와 COCO width/height 불일치
+- 빈 값·경계 밖 bbox, 잘못된/0면적 polygon
+- 동일 이미지 SHA-256 중복과 원본 파일명 충돌
+- image/annotation ID 재생성과 `annotation.image_id` 참조 보존
+- clean image와 dirty image 통계
+
+출력은 이미 존재하는 디렉터리를 덮어쓰지 않으며, 전체 검증이 끝난 뒤 원자적으로
+완성 경로로 이동한다.
+
+```text
+<MASTER_DATASET>/
+├── annotations/{master,train,validation,test}.json
+├── images/
+├── dataset_manifest.json
+├── dataset_summary.json
+├── provenance.json
+├── panel_detection/{images,annotations}/
+└── dirt_segmentation/
+    ├── {train,validation,test}/{images,masks}/
+    └── samples.jsonl
+```
+
+`provenance.json`에는 source task, original/normalized filename, SHA-256,
+capture session, burst/panel/split group, split, panel instance와 clean/dirty 상태가
+기록된다. `dataset_manifest.json`에는 dataset version/fingerprint, source SHA,
+split seed/ratio, 생성 시각과 git commit이 기록된다.
+
+### Data leakage 방지
+
+split은 ROI를 만들기 전에 원본 이미지에 대해 수행한다. 가용 metadata 중
+`panel_group → burst_group → capture_session → source_task` 순으로 가장 구체적인
+단위를 사용하며, 같은 group은 둘 이상의 split에 들어갈 수 없다. metadata가
+없으면 CVAT Task 전체를 한 group으로 처리한다.
+
+split이 확정된 다음에만 다음 파생 dataset을 만든다.
+
+- Panel detection: 원본 frame과 `solar_panel` bbox
+- Dirt segmentation: panel별 crop과 dirt binary mask
+- Clean panel: 반드시 all-zero mask negative sample로 유지
+
+### 해상도 분석, 학습과 평가
+
+저장소의 입력 크기와 `0.50` threshold는 후보/placeholder이며 최종 승인값이 아니다.
+
+```bash
+da-daka-analyze-dataset \
+  --dataset-root <MASTER_DATASET> \
+  --candidates training/configs/resolution_candidates.yaml \
+  --output <ANALYSIS_REPORT.json>
+
+da-daka-train-panel --config training/configs/panel_detector.yaml
+da-daka-train-dirt --config training/configs/dirt_segmenter.yaml
+```
+
+분석 report는 panel ROI 크기/aspect ratio, dirt area와 작은 dirt component 분포,
+후보 입력 크기의 scale/padding 분포를 기록한다. iPhone 이미지뿐 아니라 실제 장착
+상태의 Pi IMX708 거리·노출·반사·motion frame을 최종 dataset에 포함해야 한다.
+
+| 모델 | 별도 평가 항목 |
+|---|---|
+| Panel detector | precision, recall, mAP, partial-panel recall, small/distant-panel recall |
+| Dirt segmenter | IoU, Dice, dirty recall, clean specificity, false-clean/false-dirty, small-dirt recall, centroid error |
+
+validation probability로 threshold와 component minimum area를 함께 sweep한다.
+특히 실제 dirty를 clean으로 판단하는 `false_clean_rate`를 독립적으로 검토한다.
+
+```bash
+da-daka-threshold-sweep \
+  --dataset-root <MASTER_DATASET> \
+  --predictions-dir <VALIDATION_PROBABILITIES> \
+  --start 0.05 --stop 0.95 --step 0.05 \
+  --output <THRESHOLD_REPORT.json>
+```
+
+해상도·architecture·threshold를 validation에서 잠근 뒤 test split은 최종 평가에만
+사용한다. 실제 측정값 없이 해상도나 threshold를 최종값으로 선언하지 않는다.
+
+### 공통 전처리와 model bundle
+
+학습 dataset과 runtime은 `laptop_ai.preprocessing`의 같은 letterbox 구현을 쓴다.
+
+```text
+BGR frame/ROI
+→ aspect ratio 유지 resize
+→ padding
+→ manifest color/scale/mean/std
+→ float32 NCHW
+→ model
+→ padding 제거/inverse resize
+→ 원 ROI/full-frame 좌표
+```
+
+따라서 `1000×350 → 512×512`처럼 panel geometry를 찌그러뜨리는 direct resize는
+production 경로에서 사용하지 않는다. input width/height도 코드에 고정하지 않고
+모델별 manifest에서 읽는다.
+
+```bash
+da-daka-export-model \
+  --checkpoint <TRAIN_RUN/checkpoint.pt> \
+  --metrics <APPROVED_VALIDATION_REPORT.json> \
+  --threshold <APPROVED_THRESHOLD> \
+  --output-dir <NEW_MODEL_BUNDLE>
+```
+
+```text
+<MODEL_BUNDLE>/
+├── model.onnx
+├── model.json
+├── metrics.json
+└── hailo_deployment.json
+```
+
+`model.json`에는 ONNX/checkpoint SHA-256, dataset version/fingerprint, input shape,
+letterbox/color/dtype/scale/mean/std, output name/shape/activation, threshold와 component
+policy가 들어간다. panel/dirt bundle의 dataset identity가 서로 다르거나 ONNX 실제
+metadata/shape/hash가 manifest와 다르면 worker는 시작하지 않는다.
+
+```bash
+da-daka-verify-model --task panel_detection \
+  --manifest <PANEL_BUNDLE/model.json>
+da-daka-verify-model --task dirt_segmentation \
+  --manifest <DIRT_BUNDLE/model.json>
+```
+
+실제 dataset, backup, checkpoint, ONNX와 HEF weight는 `.gitignore` 대상이다. schema,
+config, pipeline 코드와 작은 synthetic test만 Git에서 관리한다.
+
+### Runtime 판단 계약
+
+production worker는 학습 기반 panel detector를 사용하고 classical contour detector는
+진단/비교용으로만 유지한다. Dirt output은 manifest에 선언된 `logits` 또는
+`probability` 방식으로만 처리하며 출력 범위를 보고 activation을 추측하지 않는다.
+
+binary mask는 connected component로 분리하고 각 component에 pixel/ratio minimum
+area를 적용한다. 분사 target은 area, mean confidence, nozzle/image target과의 거리
+가중치로 결정적으로 선택한다. 전체 foreground 평균 centroid는 사용하지 않는다.
+
+Protocol v3는 다음 의미를 구분한다.
+
+- `panel_visible`: 화면에 panel candidate가 하나 이상 존재
+- `target_panel_selected`: center gate를 통과한 현재 대상 존재
+- candidate가 있지만 선택되지 않음: `valid=false`, `panel-not-centered`
+- dirty result: target centroid/bbox/confidence, 전체 dirty ratio, component 수,
+  target component ratio 포함
+
+Pi는 version, source/IP, session, sequence/frame, timestamp와 값 범위를 검사한다.
+clean은 기본 3개의 서로 다른 연속 fresh inference가 필요하고 dirty는 기본 1개로
+빠르게 인정한다. post-spray verify는 분사 완료 barrier 이후의 새 frame만 사용한다.
 
 Pi 실기체에서 회수한 장착 오프셋, 방향 계약, 8/21 비행 제어값, 저조도 카메라
 설정과 DRV8876 미해결 상태는
@@ -514,6 +707,7 @@ PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
   ros2_ws/src/da_daka_control/test/test_perception_protocol.py \
   ros2_ws/src/da_daka_control/test/test_route_planner.py \
   ros2_ws/src/da_daka_control/test/test_spray_actuator.py \
+  ros2_ws/src/da_daka_control/test/test_spray_reaction.py \
   ros2_ws/src/da_daka_control/test/test_spray_sequence.py \
   ros2_ws/src/da_daka_control/test/test_temporal_confirmation.py \
   ros2_ws/src/da_daka_control/test/test_video_streamer.py
