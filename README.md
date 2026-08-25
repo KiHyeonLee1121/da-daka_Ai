@@ -131,6 +131,10 @@ offload runbook을 따른다.
 
 ## AI 데이터·모델 파이프라인
 
+학습 준비 상태와 다음 행동을 처음 확인하는 경우
+[`TRAINING_START_HERE.md`](TRAINING_START_HERE.md)를 먼저 읽는다. 이 문서는
+코드, Drive dataset, CUDA GPU 상태를 신호등 형태로 설명한다.
+
 ```mermaid
 flowchart TB
     Source["CVAT Backup / COCO"] --> Master["검증된 Master Dataset"]
@@ -222,6 +226,20 @@ da-daka-train-panel --config training/configs/panel_detector.yaml
 da-daka-train-dirt --config training/configs/dirt_segmenter.yaml
 ```
 
+학습 config에는 machine-specific dataset/output 절대경로를 두지 않는다. CLI의
+`--dataset-root`, `--output-dir`, 선택적인 `--artifact-dir` 또는 `DA_DAKA_*`
+environment variable로 주입한다. 현재 승인 release identity를 포함한 Drive
+preflight, `/content` staging, full SHA/fingerprint 검증, loader smoke test와 GPU
+fail-fast 실행 순서는
+[`training/colab/da_daka_training.ipynb`](training/colab/da_daka_training.ipynb)에
+준비되어 있다. 검증 실패 시 trainer는 `DATASET INCOMPLETE OR WRONG RELEASE`로
+중단된다.
+
+각 trainer는 매 epoch `checkpoints/last.pt`와 validation metric 기준
+`checkpoints/best.pt`를 저장하고, `--artifact-dir`을 지정하면 checkpoint/history를
+Drive에 원자적으로 mirror한다. `--resume <.../last.pt>`는 task, dataset
+version/fingerprint와 resume-sensitive config를 확인한 뒤에만 재개한다.
+
 분석 report는 panel ROI 크기/aspect ratio, dirt area와 작은 dirt component 분포,
 후보 입력 크기의 scale/padding 분포를 기록한다. iPhone 이미지뿐 아니라 실제 장착
 상태의 Pi IMX708 거리·노출·반사·motion frame을 최종 dataset에 포함해야 한다.
@@ -266,7 +284,7 @@ production 경로에서 사용하지 않는다. input width/height도 코드에 
 
 ```bash
 da-daka-export-model \
-  --checkpoint <TRAIN_RUN/checkpoint.pt> \
+  --checkpoint <TRAIN_RUN/checkpoints/best.pt> \
   --metrics <APPROVED_VALIDATION_REPORT.json> \
   --threshold <APPROVED_THRESHOLD> \
   --output-dir <NEW_MODEL_BUNDLE>

@@ -1,0 +1,74 @@
+name: Training readiness
+
+on:
+  push:
+    branches:
+      - 'codex/**'
+  pull_request:
+    paths:
+      - '.github/workflows/training-readiness.yml'
+      - 'training/**'
+      - 'laptop_ai/**'
+      - 'models/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-linux-cpu-training-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install clean CPU training environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            numpy opencv-python-headless PyYAML pytest tensorboard \
+            onnx onnxscript onnxruntime
+          python -m pip install torch torchvision \
+            --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ./laptop_ai --no-deps
+          python -m pip install -e ./training --no-deps
+      - name: Compile and parse training assets
+        run: |
+          python -m compileall -q training/da_daka_training training/tests laptop_ai/laptop_ai
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import yaml
+
+          notebook = json.loads(Path('training/colab/da_daka_training.ipynb').read_text())
+          assert notebook['nbformat'] == 4 and notebook['cells']
+          for path in Path('training/configs').glob('*.yaml'):
+              yaml.safe_load(path.read_text())
+          PY
+      - name: Run real CPU training orchestration tests
+        run: |
+          python -m pytest -q training/tests
+          python -m pytest -q laptop_ai/tests/test_model_contract.py
+      - name: Exercise every training CLI
+        run: |
+          da-daka-dataset --help >/dev/null
+          da-daka-train-panel --help >/dev/null
+          da-daka-train-dirt --help >/dev/null
+          da-daka-export-model --help >/dev/null
+          da-daka-evaluate-model --help >/dev/null
+          da-daka-threshold-sweep --help >/dev/null
+          da-daka-analyze-dataset --help >/dev/null
+          da-daka-verify-dataset --help >/dev/null
+          da-daka-loader-smoke --help >/dev/null
+          da-daka-gpu-doctor --allow-cpu >/dev/null
+          da-daka-readiness-report \
+            --code-only --fail-if-not-ready \
+            --output-dir readiness-artifact
+      - name: Upload human-readable readiness report
+        uses: actions/upload-artifact@v6
+        with:
+          name: training-readiness-report
+          path: readiness-artifact/

@@ -19,6 +19,7 @@ train = [
   "torchvision>=0.18,<1",
   "tensorboard>=2.16,<3",
   "onnx>=1.16,<2",
+  "onnxscript>=0.4,<1",
 ]
 test = ["pytest>=7.4"]
 
@@ -30,6 +31,10 @@ da-daka-export-model = "da_daka_training.export_model:main"
 da-daka-evaluate-model = "da_daka_training.evaluate_model:main"
 da-daka-threshold-sweep = "da_daka_training.threshold_sweep:main"
 da-daka-analyze-dataset = "da_daka_training.analysis:main"
+da-daka-verify-dataset = "da_daka_training.release:main"
+da-daka-loader-smoke = "da_daka_training.loader_smoke:main"
+da-daka-gpu-doctor = "da_daka_training.environment:main"
+da-daka-readiness-report = "da_daka_training.readiness:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
