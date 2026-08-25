@@ -8,6 +8,19 @@
 보관소가 아니다. 이어받을 때는 GitHub feature branch와 Google Drive 인수인계
 폴더를 권위 있는 작업물 저장소로 사용한다.
 
+## 원격 보관 위치
+
+| 보관물 | 링크 | 용도 |
+|---|---|---|
+| GitHub draft PR #11 | https://github.com/KiHyeonLee1121/da-daka_Ai/pull/11 | 변경 내용, 코드 검토, CI 상태 |
+| GitHub feature branch | https://github.com/KiHyeonLee1121/da-daka_Ai/tree/codex/colab-training-readiness-20260826 | 다음 AI가 이어갈 source history |
+| Drive 인수인계 폴더 | https://drive.google.com/drive/folders/1pdo8xYVdwMrk2TJxUH_ZtgK0t1PcGcyz | 문서, Colab, config, 복구 ZIP |
+| Drive dataset release | https://drive.google.com/drive/folders/1j036GtuH8RexMoK4UcnxOwTrijUsC5HD | 업로드 완료 뒤 검증할 dataset |
+
+현재 commit의 GitHub 자동검사 `Full software audit`와 `Training readiness`는 모두
+통과했다. 다음 AI는 로컬 파일보다 위 GitHub branch와 Drive 인수인계 폴더를 먼저
+확인해야 한다.
+
 ## 한눈에 보기
 
 | 단계 | 상태 | 설명 |
