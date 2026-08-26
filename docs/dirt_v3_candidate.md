@@ -53,6 +53,7 @@ ONNX parity는 9/9 view에서 PASS했다. 최대 logit delta는
 | 항목 | 잠긴 값 |
 |---|---|
 | Dirt model | `dirt_v3`, SHA-256 `17f20296f3ba14bf9d7e5f09126fd84c460ea6bc05b829b089ebb1c17ddaed7f` |
+| Best checkpoint | epoch 29, SHA-256 `da1a9477ec83e75c663ada49558603d6acf5e8894fd4c3043a7cd73cd78e807e` |
 | Panel model SHA-256 | `49175ff2da601d33646e52e78f9123fd2882b213a25d6f0cb8a18e266d26a4c5` |
 | Input | `input`, `float32`, `[1, 3, 384, 640]` |
 | Output | `binary_logit`, `float32`, `[1, 1, 384, 640]` |
