@@ -39,6 +39,31 @@ launcher는 `.venv`를 만들고 package를 설치하며 CUDA provider를 확인
 두 번째 inference가 아니라 worker가 한 번 decode·추론한 동일 frame/result를
 표시하고 Pi에 보낸다.
 
+### Dirt v3 activation boundary
+
+generic segmentation runtime은 manifest가 선언한 output name/activation을 사용한다.
+따라서 Dirt v3의 `binary_logit` (`float32`, `[1, 1, 384, 640]`,
+`class1_logit - class0_logit`)은 external `sigmoid(binary_logit)`과 component
+postprocess로 처리할 수 있다. locked postprocess는 threshold `0.997250`, minimum
+component area 8, minimum component area ratio `0.0001`이며, machine-readable authority는
+[`../models/dirt_v3_runtime_contract.json`](../models/dirt_v3_runtime_contract.json)이다.
+
+하지만 worker activation은 아직 금지된다. Dirt v3 handoff의 compatibility ONNX path는
+`models/dirt_v2/model.onnx` 및 `models/dirt_v2.onnx`지만,
+`models/dirt_v2/model.json`은 old `images`/`mask_logits` v2 contract를 선언하는 stale
+sidecar다. `CHECKSUMS.sha256`도 old Dirt v2 ONNX digest를 기록한 stale checksum이다.
+이 metadata를 `--dirt-manifest` 또는 config에 전달하면 fail-closed 검증이 거부해야
+하며, 우회하면 안 된다. v3 ONNX hash/I/O/preprocess/postprocess에 일치하는 schema-v1
+sidecar가 새로 제공될 때까지 runtime activation은
+`PENDING_MATCHING_SCHEMA_V1_SIDECAR`다. 이 repository에서 v3 `model.json`을 만들어
+활성화하지 않는다.
+
+Dirt v3 quality status는 `QUALITY_EVALUATED`이고 deployment status는
+`PRODUCTION_CANDIDATE`지만, model은 `LOCKED_DO_NOT_TUNE`, final unseen은
+`CONSUMED_DO_NOT_TUNE`, approval은 `FIELD_APPROVAL_REQUIRED`, production approval은
+`false`다. 상세 evidence는 [`../docs/dirt_v3_candidate.md`](../docs/dirt_v3_candidate.md)를
+따른다.
+
 화면 표시는 다음과 같다.
 
 - 파랑: 학습 detector가 찾은 모든 panel candidate

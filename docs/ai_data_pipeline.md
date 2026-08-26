@@ -108,6 +108,23 @@ mask로 합친다. dirt가 없는 panel crop은 반드시 all-zero negative samp
 
 ## 데이터 분석과 해상도 선택
 
+### 잠긴 Dirt v3 예외
+
+현재 checked-in contract는 일반 후보가 아니라 quality가 평가된 Dirt v3 후보를
+기록한다. `models/dirt_v3_runtime_contract.json`의 Dirt SHA-256은
+`17f20296f3ba14bf9d7e5f09126fd84c460ea6bc05b829b089ebb1c17ddaed7f`, input은 `input`
+`float32 [1, 3, 384, 640]`, output은 `binary_logit` `float32 [1, 1, 384, 640]`다.
+semantic은 `class1_logit - class0_logit`이고 runtime은 output 범위로 추측하지 않고
+선언된 logits에 external `sigmoid(binary_logit)`을 적용한다.
+
+DEV 32장(dirty 18, clean 14)에서 final unseen 전에 `0.997250`, minimum component
+area 8, minimum component area ratio `0.0001`을 잠갔다. final unseen은 이미
+`CONSUMED_DO_NOT_TUNE`이므로 이 후보에는 해상도/threshold/component filter sweep,
+재학습, old final test 접근을 하지 않는다. complete evidence와 regression/final 결과는
+[`dirt_v3_candidate.md`](dirt_v3_candidate.md)를 따른다.
+
+나머지 이 절의 analysis 절차는 새 후보를 위한 절차다.
+
 ```bash
 da-daka-analyze-dataset \
   --dataset-root <DATASET_ROOT> \
@@ -167,11 +184,12 @@ da-daka-threshold-sweep \
   --output <THRESHOLD_REPORT.json>
 ```
 
-0.50은 placeholder다. 최종 threshold는 false-clean 위험을 우선 검토하면서
+새 후보에서 0.50은 placeholder다. 최종 threshold는 false-clean 위험을 우선 검토하면서
 precision/recall/IoU/Dice/false-clean/false-dirty를 함께 보고 사람이 승인한다.
 threshold와 component filter 후보는 runtime과 같은 connected-component 구현으로
 함께 평가한다.
 테스트 split은 threshold나 해상도 선택에 사용하지 않고 최종 잠금 평가에만 쓴다.
+잠긴 Dirt v3는 이 선택과 final unseen 평가를 끝냈으며, 다시 selection에 사용하지 않는다.
 
 학습 명령은 dirt validation probability를 run의 `validation_probabilities/`에
 저장한다. 해상도·architecture·threshold를 잠근 뒤 test split을 한 번 평가한다.
@@ -227,6 +245,16 @@ metadata가 모두 일치하지 않으면 시작을 거부하며, panel/dirt bun
 version/fingerprint가 서로 달라도 worker를 시작하지 않는다. output 범위를 보고 sigmoid
 적용 여부를 추측하지 않는다.
 
+Dirt v3는 이 일반 export 형식의 새 bundle을 뜻하지 않는다. 두 compatibility ONNX
+delivery path는 `models/dirt_v2/model.onnx`와 `models/dirt_v2.onnx`로 유지한다.
+그러나 `models/dirt_v2/model.json`은 old `images`/`mask_logits` v2 contract를 선언하는
+stale sidecar이고, handoff `CHECKSUMS.sha256` 역시 old Dirt v2 ONNX digest를 담은 stale
+checksum이다. 어느 metadata도 v3 authority가 아니므로 fail-closed worker에 전달하면
+안 된다. v3 ONNX hash, I/O, preprocess와 postprocess에 정확히 일치하는 schema-v1
+manifest가 재생성되기 전까지 runtime activation은
+`PENDING_MATCHING_SCHEMA_V1_SIDECAR`이다. 이 repository contract를 `model.json`으로
+바꾸거나 v3 `model.json`을 추측해 만들지 않는다.
+
 배포 전 두 bundle을 독립적으로 검사할 수 있다.
 
 ```bash
@@ -238,12 +266,17 @@ da-daka-verify-model --task dirt_segmentation \
 
 ## runtime 후처리와 protocol-v3
 
-segmentation 출력은 manifest의 `logits` 또는 `probability` 계약대로만 활성화한
+generic segmentation 출력은 manifest의 `logits` 또는 `probability` 계약대로만 활성화한
 뒤 threshold하고 원 ROI로 복원한다. `connectedComponentsWithStats`로 분리한 각
 component에 minimum pixel area와 minimum area ratio를 개별 적용한다. 각 component는
 area, bbox, centroid, mean foreground confidence를 가진다. target 선택은 정규화한
 area/confidence/노즐 목표점 거리의 가중합이며 동률은 안정적인 geometry 순서로
 결정되는 deterministic policy다.
+
+이미 구현된 generic runtime은 declared single output logits와 external sigmoid/postprocess를
+처리할 수 있다. Dirt v3에도 그 동작은 맞지만, stale sidecar를 통해서는 시작할 수 없다.
+matching schema-v1 sidecar가 delivery되어 hash/I/O/metadata 검증을 통과할 때만
+activation한다.
 
 protocol-v3은 모든 panel candidate의 존재인 `panel_visible`과 center gate를 통과한
 `target_panel_selected`를 분리하고 선택된 candidate ID를 함께 보낸다. 따라서 candidate가 있으나 목표가 선택되지 않은

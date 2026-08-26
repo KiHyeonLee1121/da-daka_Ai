@@ -27,9 +27,11 @@ AI 실행 경로는 NVIDIA GPU 노트북의 manifest 기반 ONNX 추론이며, R
   `EN/IN1`을 구동하며 Raspberry Pi GPIO는 사용하지 않는다.
 - CVAT/COCO ingest부터 Master Dataset, grouped split, panel/dirt 학습·평가,
   ONNX export와 runtime contract까지의 소프트웨어 경로는 구현되어 있다.
-- 실제 프로젝트 데이터로 만든 Master Dataset과 학습 weight는 저장소에 없으며,
-  validation으로 input size·threshold를 결정하고 실기체 검증하기 전에는
-  자율분사 준비 완료 상태가 아니다.
+- 실제 프로젝트 데이터로 만든 Master Dataset과 학습 weight는 저장소에 없다.
+  Dirt v3 후보는 DEV로 threshold를 잠근 뒤 final unseen을 소비해 quality를 평가했고,
+  세부 evidence는 [`docs/dirt_v3_candidate.md`](docs/dirt_v3_candidate.md)에 있다.
+  그러나 field approval·실기체 검증과 matching schema-v1 sidecar는 아직 없으므로
+  자율분사 준비 완료 상태는 아니다.
 
 ## 최종 임무
 
@@ -108,6 +110,7 @@ flowchart TB
 | `models` | 모델 manifest schema와 배포 bundle 계약(weight 제외) |
 | `laptop_ai` | manifest 검증 ONNX runtime, 공통 전처리/후처리와 benchmark |
 | `docs/ai_data_pipeline.md` | 라벨링부터 모델 배포·Hailo 검증까지의 실제 계약 |
+| `docs/dirt_v3_candidate.md` | 잠긴 Dirt v3 후보의 학습·평가 evidence, delivery 결함과 승인 경계 |
 | `docs/autonomous_cleaning_architecture.md` | 최종 구조와 구현 연결 상세 |
 | `docs/edge_gpu_offload_runbook.md` | Pi–노트북 GPU offload 연결, 안전 점검과 2026-08-16 현장 검증 결과 |
 | `docs/spray_reaction_feedforward.md` | 분사 반동 feedforward 통합, 실측값과 승인 절차 |
@@ -139,6 +142,28 @@ flowchart TB
     Train --> Export["평가 + ONNX/model manifest"]
     Export --> Runtime["Production perception runtime"]
 ```
+
+### 활성 Dirt v3 후보 계약
+
+현재 기록된 Dirt 후보는 panel detector가 선택한 panel ROI를 입력으로 받는 경로다.
+즉 `Panel detector → letterbox ROI → Dirt v3 ONNX → external sigmoid/postprocess`
+순서이며, Dirt v3 output은 `binary_logit` (`float32`, `[1, 1, 384, 640]`)이다.
+`sigmoid(binary_logit)`은 ONNX 밖에서 적용하고, threshold `0.997250`, minimum
+component area 8 pixels, minimum component area ratio `0.0001`을 사용한다. 정확한
+machine contract와 Dirt SHA-256
+`17f20296f3ba14bf9d7e5f09126fd84c460ea6bc05b829b089ebb1c17ddaed7f`는
+[`models/dirt_v3_runtime_contract.json`](models/dirt_v3_runtime_contract.json)에 있다.
+
+final unseen 77장의 sealed 결과는 dirty 45/45, clean 31/32, global Dice `0.893593`이다.
+이는 `QUALITY_EVALUATED` production candidate의 quality evidence이며 field approval은
+아니다: `production_approved=false`, `FIELD_APPROVAL_REQUIRED`다. final unseen은
+`CONSUMED_DO_NOT_TUNE`이며 retune/retrain 또는 재평가에 사용하지 않는다.
+
+호환 ONNX delivery path `models/dirt_v2/model.onnx`와 `models/dirt_v2.onnx`는 유지한다.
+하지만 `models/dirt_v2/model.json`은 old `images`/`mask_logits` v2 I/O를 선언하는 stale
+sidecar이고 `CHECKSUMS.sha256`도 old Dirt v2 digest를 가진 stale checksum이다. 이 둘을
+worker에 주거나 v3 metadata로 취급하면 안 된다. matching schema-v1 sidecar가 새로
+생성될 때까지 runtime activation은 pending이며, v3 `model.json`을 임의로 만들지 않는다.
 
 ### 라벨 계약
 
@@ -210,7 +235,8 @@ split이 확정된 다음에만 다음 파생 dataset을 만든다.
 
 ### 해상도 분석, 학습과 평가
 
-저장소의 입력 크기와 `0.50` threshold는 후보/placeholder이며 최종 승인값이 아니다.
+아래 일반 파이프라인에서의 입력 크기와 `0.50` threshold는 후보/placeholder이며 최종
+승인값이 아니다. 이는 이미 잠긴 Dirt v3 계약(`384×640`, `0.997250`)에는 적용하지 않는다.
 
 ```bash
 da-daka-analyze-dataset \
@@ -231,7 +257,7 @@ da-daka-train-dirt --config training/configs/dirt_segmenter.yaml
 | Panel detector | precision, recall, mAP, partial-panel recall, small/distant-panel recall |
 | Dirt segmenter | IoU, Dice, dirty recall, clean specificity, false-clean/false-dirty, small-dirt recall, centroid error |
 
-validation probability로 threshold와 component minimum area를 함께 sweep한다.
+새 후보의 validation probability로 threshold와 component minimum area를 함께 sweep한다.
 특히 실제 dirty를 clean으로 판단하는 `false_clean_rate`를 독립적으로 검토한다.
 
 ```bash
@@ -242,8 +268,9 @@ da-daka-threshold-sweep \
   --output <THRESHOLD_REPORT.json>
 ```
 
-해상도·architecture·threshold를 validation에서 잠근 뒤 test split은 최종 평가에만
-사용한다. 실제 측정값 없이 해상도나 threshold를 최종값으로 선언하지 않는다.
+새 후보는 해상도·architecture·threshold를 validation에서 잠근 뒤 test split을 최종
+평가에만 사용한다. 실제 측정값 없이 해상도나 threshold를 최종값으로 선언하지 않는다.
+잠긴 Dirt v3는 이 절차를 끝냈으므로 threshold sweep/retune 대상이 아니다.
 
 ### 공통 전처리와 model bundle
 
@@ -621,6 +648,12 @@ footprint 두 파일의 값이 다르면 측량 좌표와 최종 정렬이 서�
 | 성능 | 실제 해상도와 모델로 warm-up 후 추론 지연, decode 지연, GPU memory, 온도/throttling을 측정한다. 전체 결과가 timeout보다 충분히 빨라야 한다. |
 | AI HAT+ | DFC parse/calibration/HEF compile, ONNX 대비 정확도와 Hailo-8L 전체 지연을 검증하고 adapter/HIL test를 추가하기 전까지 활성화하지 않는다. |
 
+Dirt v3의 quality evidence와 artifact hash는 별도 기록됐지만, runtime에는 matching
+schema-v1 `model.json`이 아직 없다. 기존 `models/dirt_v2/model.json` 및
+`CHECKSUMS.sha256`는 stale metadata라서 fail-closed worker에 전달할 수 없다. 두 호환
+ONNX path(`models/dirt_v2/model.onnx`, `models/dirt_v2.onnx`)를 보존하되, 정확한 v3
+sidecar가 도착하기 전에는 activation/configuration approval을 열지 않는다.
+
 모델이 없으면 통신과 ROS stack은 진단할 수 있지만 실제 오염 판단과 전체 임무
 검증은 완료할 수 없다. 임의 더미 모델로 approval gate를 통과시키지 않는다.
 
@@ -717,6 +750,7 @@ PYTHONPATH=ros2_ws/src/da_daka_control python -m pytest -q \
 
 - [최종 자율 청소 구조](docs/autonomous_cleaning_architecture.md)
 - [AI 데이터·학습·배포 파이프라인](docs/ai_data_pipeline.md)
+- [Dirt v3 잠금 후보 evidence와 배포 경계](docs/dirt_v3_candidate.md)
 - [3초 분사 시퀀스 시험 절차](docs/spray_sequence_test_procedure.md)
 - [분사 반동 피드포워드 통합](docs/spray_reaction_feedforward.md)
 - [현장 좌표·카메라 진단](docs/field_diagnostics.md)
