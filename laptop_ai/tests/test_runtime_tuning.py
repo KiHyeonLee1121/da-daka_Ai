@@ -1,3 +1,6 @@
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from laptop_ai.runtime_tuning import RuntimeTuning, configure_cuda_environment
@@ -20,10 +23,11 @@ def test_runtime_tuning_loads_cuda_profile():
 
 
 def test_cuda_environment_preloads_pip_cuda_libraries(monkeypatch):
-    import onnxruntime as ort
-
     calls = []
-    monkeypatch.setattr(ort, 'preload_dlls', lambda **kwargs: calls.append(kwargs))
+    fake_ort = SimpleNamespace(
+        preload_dlls=lambda **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setitem(sys.modules, 'onnxruntime', fake_ort)
 
     configure_cuda_environment(RuntimeTuning())
 
