@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
 import platform
+from pathlib import Path
 import subprocess
 import sys
 
@@ -47,6 +49,23 @@ def main() -> int:
         import onnxruntime as ort
     except ImportError:
         print("ERROR: onnxruntime-gpu is not installed", file=sys.stderr)
+        return 2
+
+    preload = getattr(ort, 'preload_dlls', None)
+    if preload is not None:
+        preload(directory='')
+    provider_library = (
+        Path(ort.__file__).resolve().parent
+        / 'capi'
+        / 'libonnxruntime_providers_cuda.so'
+    )
+    try:
+        ctypes.CDLL(str(provider_library))
+    except OSError as exc:
+        print(
+            f'ERROR: CUDA provider library failed to load: {exc}',
+            file=sys.stderr,
+        )
         return 2
 
     providers = ort.get_available_providers()

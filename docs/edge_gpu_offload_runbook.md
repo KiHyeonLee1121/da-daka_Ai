@@ -87,7 +87,7 @@ test -f <DIRT_BUNDLE/model.json>
 da-daka-nvidia-check
 ./tools/start_laptop_ai_viewer.sh --pi-ip <PI_IP> \
   --panel-manifest <PANEL_BUNDLE/model.json> \
-  --dirt-manifest <DIRT_BUNDLE/model.json> --skip-install
+  --dirt-manifest <DIRT_BUNDLE/model.json>
 ```
 
 `da-daka-nvidia-check`와 실제 ONNX 연산에서 `CUDAExecutionProvider`를 확인한다.
@@ -118,6 +118,11 @@ PI_PROJECT=<PI_REPOSITORY> \
 먼저 유지한 뒤 카메라 전송 터미널도 계속 열어 둔다. 카메라 전송을 끝낼 때
 `Ctrl-C`를 누르면 SSH를 통해 Pi의 카메라와 통신 컨테이너가 함께 정리된다.
 MAVROS, 미션, TF-Luna와 Pixhawk 분사 노드는 시작하지 않는다.
+
+프레임별 관찰 전용 앱은 이 launcher를 `DA_DAKA_CAMERA_ONLY=1`로 호출한다. 이
+모드에서는 `edge_gpu_link.py`와 ROS control/result process를 시작하지 않고 Pi
+호스트의 `rpicam-vid`만 UDP 5600으로 송출한다. 앱이 관리하는 비대화형 실행에는
+`DA_DAKA_NONINTERACTIVE=1`도 함께 설정한다.
 
 ## Pi 통신 전용 시험
 

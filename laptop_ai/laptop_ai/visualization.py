@@ -33,6 +33,7 @@ class VisualizationState:
     target_x_norm: float
     target_y_norm: float
     dirt_values: Mapping[str, float]
+    dirt_components: Sequence[Mapping[str, float]] = ()
 
 
 def _point(width: int, height: int, x_norm: float, y_norm: float) -> tuple[int, int]:
@@ -59,6 +60,29 @@ def _normalized_box(
         + float(values.get('dirt_bbox_w_norm', 0.0)),
         float(values.get('dirt_bbox_y_norm', 0.0))
         + float(values.get('dirt_bbox_h_norm', 0.0)),
+    )
+    return (left, top), (right, bottom)
+
+
+def _component_box(
+    width: int,
+    height: int,
+    values: Mapping[str, float],
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Map one monitor component overlay into frame pixels."""
+    left, top = _point(
+        width,
+        height,
+        float(values.get('bbox_x_norm', 0.0)),
+        float(values.get('bbox_y_norm', 0.0)),
+    )
+    right, bottom = _point(
+        width,
+        height,
+        float(values.get('bbox_x_norm', 0.0))
+        + float(values.get('bbox_w_norm', 0.0)),
+        float(values.get('bbox_y_norm', 0.0))
+        + float(values.get('bbox_h_norm', 0.0)),
     )
     return (left, top), (right, bottom)
 
@@ -123,7 +147,8 @@ def render_overlay(
     selected_id = selected.candidate_id if selected is not None else None
     for panel in panels:
         is_selected = panel.candidate_id == selected_id
-        color = (70, 220, 110) if is_selected else (230, 170, 40)
+        # OpenCV uses BGR: panels are blue, with a brighter selected target.
+        color = (255, 150, 45) if is_selected else (255, 90, 25)
         thickness = 3 if is_selected else 2
         first = (panel.x, panel.y)
         second = (panel.x + panel.width, panel.y + panel.height)
@@ -153,9 +178,27 @@ def render_overlay(
         thickness=2,
     )
 
-    if state.dirt_found:
+    # Every accepted dirt component is visible, not only the selected target.
+    for component in state.dirt_components:
+        first, second = _component_box(width, height, component)
+        color = (55, 220, 75)
+        cv2.rectangle(output, first, second, color, 2)
+        component_id = int(component.get('component_id', 0))
+        confidence = float(component.get('confidence', 0.0))
+        cv2.putText(
+            output,
+            f'DIRT {component_id} {confidence:.2f}',
+            (first[0], max(header_height + 18, first[1] - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.46,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    if state.dirt_found and state.dirt_values:
         first, second = _normalized_box(width, height, state.dirt_values)
-        cv2.rectangle(output, first, second, (40, 40, 245), 3)
+        cv2.rectangle(output, first, second, (60, 245, 90), 3)
         centroid = _point(
             width,
             height,
@@ -165,7 +208,7 @@ def render_overlay(
         cv2.drawMarker(
             output,
             centroid,
-            (40, 40, 245),
+            (60, 245, 90),
             markerType=cv2.MARKER_TILTED_CROSS,
             markerSize=24,
             thickness=3,
@@ -174,11 +217,11 @@ def render_overlay(
         component_count = int(state.dirt_values.get('dirt_component_count', 0))
         cv2.putText(
             output,
-            f'DIRT {confidence:.2f}  COMPONENTS {component_count}',
+            f'DIRT TARGET {confidence:.2f}  COMPONENTS {component_count}',
             (first[0], max(header_height + 20, first[1] - 8)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,
-            (40, 40, 245),
+            (60, 245, 90),
             2,
             cv2.LINE_AA,
         )
@@ -191,7 +234,7 @@ def render_overlay(
         status_color = (60, 90, 240)
     elif state.dirt_found:
         status = 'DIRT DETECTED'
-        status_color = (60, 80, 245)
+        status_color = (60, 230, 90)
     elif state.target_panel_selected:
         status = 'PANEL DETECTED - NO DIRT'
         status_color = (70, 210, 110)

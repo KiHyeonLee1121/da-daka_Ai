@@ -45,6 +45,9 @@ performance:
   cuda_module_loading_lazy: true
 
 runtime:
+  # production_onnx rejects test-only or human-review-pending bundles.
+  # artifact_test is explicit and never a silent fallback.
+  mode: "production_onnx"
   idle_heartbeat_s: 0.25
   # Observe-only until real bitrate/inference/accuracy profiles are measured.
   optimizer_config: "laptop_ai/config/pendulum_optimization.yaml"

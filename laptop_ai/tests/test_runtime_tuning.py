@@ -1,6 +1,9 @@
+import sys
+from types import SimpleNamespace
+
 import pytest
 
-from laptop_ai.runtime_tuning import RuntimeTuning
+from laptop_ai.runtime_tuning import RuntimeTuning, configure_cuda_environment
 
 
 def test_runtime_tuning_rejects_unknown_and_invalid_values():
@@ -17,3 +20,15 @@ def test_runtime_tuning_loads_cuda_profile():
     })
     assert config.onnx_device_id == 1
     assert config.onnx_cuda_cudnn_conv_algo_search == 'HEURISTIC'
+
+
+def test_cuda_environment_preloads_pip_cuda_libraries(monkeypatch):
+    calls = []
+    fake_ort = SimpleNamespace(
+        preload_dlls=lambda **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setitem(sys.modules, 'onnxruntime', fake_ort)
+
+    configure_cuda_environment(RuntimeTuning())
+
+    assert calls == [{'directory': ''}]

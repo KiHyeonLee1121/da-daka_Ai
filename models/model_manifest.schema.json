@@ -6,9 +6,21 @@
   "required": [
     "manifest_version",
     "task",
+    "architecture_family",
     "model_file",
     "model_sha256",
+    "onnx_opset",
     "checkpoint_sha256",
+    "release_id",
+    "training_run_id",
+    "export_timestamp",
+    "export_tool_versions",
+    "class_mapping",
+    "test_only",
+    "deployment_approved",
+    "safety",
+    "input_name",
+    "input_shape",
     "input_width",
     "input_height",
     "resize",
@@ -24,6 +36,7 @@
     "output_channel",
     "output_names",
     "threshold",
+    "threshold_report_sha256",
     "dataset_version",
     "dataset_fingerprint",
     "git_commit"
@@ -31,9 +44,35 @@
   "properties": {
     "manifest_version": {"const": 1},
     "task": {"enum": ["panel_detection", "dirt_segmentation"]},
+    "architecture_family": {"type": "string", "minLength": 1, "maxLength": 256},
     "model_file": {"type": "string", "pattern": "^[^/\\\\]+$"},
     "model_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "onnx_opset": {"type": "integer", "minimum": 11},
     "checkpoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "release_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "training_run_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "export_timestamp": {"type": "string", "format": "date-time"},
+    "export_tool_versions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "class_mapping": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "test_only": {"type": "boolean"},
+    "deployment_approved": {"type": "boolean"},
+    "safety": {
+      "enum": ["TEST_ONLY", "REQUIRES_HUMAN_REVIEW", "PRODUCTION_APPROVED"]
+    },
+    "input_name": {"type": "string", "minLength": 1, "maxLength": 256},
+    "input_shape": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"type": "integer", "minimum": 1}
+    },
     "input_width": {"type": "integer", "minimum": 1},
     "input_height": {"type": "integer", "minimum": 1},
     "resize": {"const": "letterbox"},
@@ -70,6 +109,7 @@
       "additionalProperties": false
     },
     "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+    "threshold_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "dataset_version": {"type": "string", "minLength": 1},
     "dataset_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "git_commit": {"type": "string", "minLength": 1}

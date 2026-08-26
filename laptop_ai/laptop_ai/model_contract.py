@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -26,14 +27,18 @@ def sha256_file(path: str | Path) -> str:
 
 
 def verify_pipeline_dataset_identity(*manifests: 'ModelManifest') -> None:
-    """Require all cooperating models to declare the same Master Dataset."""
+    """Require cooperating models to share one dataset and release identity."""
     identities = {
-        (manifest.dataset_version, manifest.dataset_fingerprint)
+        (
+            manifest.dataset_version,
+            manifest.dataset_fingerprint,
+            manifest.release_id,
+        )
         for manifest in manifests
     }
     if len(identities) != 1:
         raise ModelContractError(
-            'pipeline model dataset version/fingerprint mismatch: '
+            'pipeline model dataset version/fingerprint or release mismatch: '
             f'{sorted(identities)}'
         )
 
@@ -71,9 +76,20 @@ class ModelManifest:
     raw: Mapping[str, Any]
     manifest_version: int
     task: str
+    architecture_family: str
     model_file: str
     model_sha256: str
+    onnx_opset: int
     checkpoint_sha256: str
+    release_id: str
+    training_run_id: str
+    export_timestamp: str
+    export_tool_versions: Mapping[str, str]
+    class_mapping: Mapping[str, int]
+    test_only: bool
+    deployment_approved: bool
+    safety: str
+    input_name: str
     input_width: int
     input_height: int
     resize: str
@@ -88,6 +104,7 @@ class ModelManifest:
     output_layout: str
     output_channel: int
     threshold: float
+    threshold_report_sha256: str
     dataset_version: str
     dataset_fingerprint: str
     git_commit: str
@@ -100,6 +117,10 @@ class ModelManifest:
     def input_shape(self) -> tuple[int, int, int, int]:
         return (1, 3, self.input_height, self.input_width)
 
+    @property
+    def threshold_report_path(self) -> Path:
+        return self.path.parent / 'metrics.json'
+
     @classmethod
     def load(
         cls,
@@ -107,6 +128,8 @@ class ModelManifest:
         *,
         expected_task: str | None = None,
         verify_model_hash: bool = True,
+        require_deployment_approved: bool = False,
+        allow_test_only: bool = False,
     ) -> 'ModelManifest':
         path = Path(manifest_path).expanduser().resolve()
         if not path.is_file():
@@ -127,6 +150,7 @@ class ModelManifest:
             raise ModelContractError(
                 f'expected task {expected_task!r}, manifest declares {task!r}'
             )
+        architecture_family = _required_string(raw, 'architecture_family')
         activation = str(raw.get('output_activation', '')).lower()
         if task == 'dirt_segmentation' and activation not in {
             'logits',
@@ -205,6 +229,60 @@ class ModelManifest:
             raise ModelContractError(
                 'checkpoint_sha256 must be a 64-character hex digest'
             )
+        release_id = _required_string(raw, 'release_id')
+        training_run_id = _required_string(raw, 'training_run_id')
+        export_timestamp = _required_string(raw, 'export_timestamp')
+        try:
+            parsed_timestamp = datetime.fromisoformat(
+                export_timestamp.replace('Z', '+00:00')
+            )
+        except ValueError as exc:
+            raise ModelContractError(
+                'export_timestamp must be ISO-8601'
+            ) from exc
+        if parsed_timestamp.tzinfo is None:
+            raise ModelContractError('export_timestamp must include a timezone')
+        export_tool_versions = _string_mapping(raw, 'export_tool_versions')
+        class_mapping = _class_mapping(raw, task)
+        test_only = _boolean(raw, 'test_only')
+        deployment_approved = _boolean(raw, 'deployment_approved')
+        safety = _required_string(raw, 'safety')
+        allowed_safety = {
+            'TEST_ONLY',
+            'REQUIRES_HUMAN_REVIEW',
+            'PRODUCTION_APPROVED',
+        }
+        if safety not in allowed_safety:
+            raise ModelContractError(
+                f'safety must be one of {sorted(allowed_safety)}'
+            )
+        if test_only:
+            if deployment_approved or safety != 'TEST_ONLY':
+                raise ModelContractError(
+                    'test-only artifacts must be unapproved with safety=TEST_ONLY'
+                )
+        elif deployment_approved:
+            if safety != 'PRODUCTION_APPROVED':
+                raise ModelContractError(
+                    'approved artifacts require safety=PRODUCTION_APPROVED'
+                )
+        elif safety != 'REQUIRES_HUMAN_REVIEW':
+            raise ModelContractError(
+                'unapproved trained artifacts require '
+                'safety=REQUIRES_HUMAN_REVIEW'
+            )
+        threshold_report_sha256 = raw.get('threshold_report_sha256')
+        if (
+            not isinstance(threshold_report_sha256, str)
+            or len(threshold_report_sha256) != 64
+            or any(
+                char not in '0123456789abcdef'
+                for char in threshold_report_sha256.lower()
+            )
+        ):
+            raise ModelContractError(
+                'threshold_report_sha256 must be a 64-character hex digest'
+            )
         dataset_version = raw.get('dataset_version')
         dataset_fingerprint = raw.get('dataset_fingerprint')
         git_commit = raw.get('git_commit')
@@ -226,6 +304,12 @@ class ModelManifest:
 
         width = _integer(raw, 'input_width')
         height = _integer(raw, 'input_height')
+        input_name = _required_string(raw, 'input_name')
+        input_shape = raw.get('input_shape')
+        if input_shape != [1, 3, height, width]:
+            raise ModelContractError(
+                f'input_shape must be exactly {[1, 3, height, width]}'
+            )
         padding_value = _integer(raw, 'padding_value', minimum=0)
         if padding_value > 255:
             raise ModelContractError('padding_value must be within [0, 255]')
@@ -248,9 +332,20 @@ class ModelManifest:
             raw=raw,
             manifest_version=_integer(raw, 'manifest_version'),
             task=task,
+            architecture_family=architecture_family,
             model_file=model_file,
             model_sha256=model_sha256.lower(),
+            onnx_opset=_integer(raw, 'onnx_opset', minimum=11),
             checkpoint_sha256=checkpoint_sha256.lower(),
+            release_id=release_id,
+            training_run_id=training_run_id,
+            export_timestamp=export_timestamp,
+            export_tool_versions=export_tool_versions,
+            class_mapping=class_mapping,
+            test_only=test_only,
+            deployment_approved=deployment_approved,
+            safety=safety,
+            input_name=input_name,
             input_width=width,
             input_height=height,
             resize=resize,
@@ -265,6 +360,7 @@ class ModelManifest:
             output_layout=output_layout,
             output_channel=_integer(raw, 'output_channel', minimum=0),
             threshold=threshold,
+            threshold_report_sha256=threshold_report_sha256.lower(),
             dataset_version=dataset_version,
             dataset_fingerprint=dataset_fingerprint.lower(),
             git_commit=git_commit,
@@ -279,6 +375,25 @@ class ModelManifest:
                 raise ModelContractError(
                     f'model SHA-256 mismatch: expected {manifest.model_sha256}, got {actual}'
                 )
+            if not manifest.threshold_report_path.is_file():
+                raise ModelContractError(
+                    'threshold report declared by manifest is missing: '
+                    f'{manifest.threshold_report_path}'
+                )
+            actual_report = sha256_file(manifest.threshold_report_path)
+            if actual_report != manifest.threshold_report_sha256:
+                raise ModelContractError(
+                    'threshold report SHA-256 mismatch: expected '
+                    f'{manifest.threshold_report_sha256}, got {actual_report}'
+                )
+        if manifest.test_only and not allow_test_only:
+            raise ModelContractError(
+                'test-only model rejected; explicit artifact-test mode is required'
+            )
+        if require_deployment_approved and not manifest.deployment_approved:
+            raise ModelContractError(
+                'model is not deployment-approved for production runtime'
+            )
         return manifest
 
     def verify_onnx_session(self, session: Any) -> None:
@@ -293,8 +408,12 @@ class ModelManifest:
             ) from exc
         expected_metadata = {
             'da_daka.task': self.task,
+            'da_daka.architecture_family': self.architecture_family,
             'da_daka.output_activation': self.output_activation,
             'da_daka.manifest_version': str(self.manifest_version),
+            'da_daka.onnx_opset': str(self.onnx_opset),
+            'da_daka.release_id': self.release_id,
+            'da_daka.training_run_id': self.training_run_id,
         }
         for key, expected_value in expected_metadata.items():
             if metadata.get(key) != expected_value:
@@ -304,6 +423,11 @@ class ModelManifest:
                 )
         if len(inputs) != 1:
             raise ModelContractError('exactly one ONNX input is required')
+        if inputs[0].name != self.input_name:
+            raise ModelContractError(
+                f'ONNX input name {inputs[0].name!r} does not match '
+                f'{self.input_name!r}'
+            )
         if not _shape_matches(inputs[0].shape, self.input_shape):
             raise ModelContractError(
                 f'ONNX input shape {inputs[0].shape} does not match {self.input_shape}'
@@ -344,6 +468,51 @@ def _shape_matches(actual: Sequence[Any], expected: Sequence[Any]) -> bool:
         if int(left) != int(right):
             return False
     return True
+
+
+def _required_string(raw: Mapping[str, Any], name: str) -> str:
+    value = raw.get(name)
+    if not isinstance(value, str) or not value.strip() or len(value) > 256:
+        raise ModelContractError(f'{name} must be a non-empty string <= 256 chars')
+    return value
+
+
+def _boolean(raw: Mapping[str, Any], name: str) -> bool:
+    value = raw.get(name)
+    if not isinstance(value, bool):
+        raise ModelContractError(f'{name} must be boolean')
+    return value
+
+
+def _string_mapping(raw: Mapping[str, Any], name: str) -> Mapping[str, str]:
+    value = raw.get(name)
+    if (
+        not isinstance(value, dict)
+        or not value
+        or not all(
+            isinstance(key, str)
+            and key
+            and isinstance(item, str)
+            and item
+            for key, item in value.items()
+        )
+    ):
+        raise ModelContractError(f'{name} must be a non-empty string mapping')
+    return dict(value)
+
+
+def _class_mapping(raw: Mapping[str, Any], task: str) -> Mapping[str, int]:
+    value = raw.get('class_mapping')
+    expected = (
+        {'background': 0, 'solar_panel': 1}
+        if task == 'panel_detection'
+        else {'clean': 0, 'dirt': 1}
+    )
+    if value != expected:
+        raise ModelContractError(
+            f'class_mapping for {task} must be exactly {expected}'
+        )
+    return dict(value)
 
 
 def _validate_task_contract(raw: Mapping[str, Any], task: str) -> None:

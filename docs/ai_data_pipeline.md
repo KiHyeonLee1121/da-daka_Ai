@@ -213,19 +213,25 @@ da-daka-export-model \
   --checkpoint <RUN/best.pt> \
   --metrics <LOCKED_VALIDATION_REPORT.json> \
   --threshold <APPROVED_THRESHOLD> \
+  --release-id <MODEL_PAIR_RELEASE_ID> \
+  --training-run-id <TASK_TRAINING_RUN_ID> \
   --output-dir <NEW_MODEL_BUNDLE>
 ```
 
 새 출력 디렉터리에는 `model.onnx`, `model.json`, `metrics.json`과
 `hailo_deployment.json`이 생긴다. 원 checkpoint는 training run에 보존하고 그
 SHA-256을 model manifest에 기록한다. 실제 weight/output은 Git에 커밋하지 않는다.
-`model.json`은 input shape/preprocess/output activation/output shape/threshold,
-component filter/selection, dataset version/fingerprint, model SHA-256와 git commit을
-기록한다. ONNX 자체에도 task, activation, manifest version custom metadata를
-기록한다. runtime은 model hash, manifest, ONNX metadata와 실제 input/output
-metadata가 모두 일치하지 않으면 시작을 거부하며, panel/dirt bundle의 dataset
-version/fingerprint가 서로 달라도 worker를 시작하지 않는다. output 범위를 보고 sigmoid
-적용 여부를 추측하지 않는다.
+`model.json`은 architecture family, input name/shape/preprocess/output
+activation/output shape/threshold,
+component filter/selection, dataset version/fingerprint, model/checkpoint/threshold
+report SHA-256, ONNX opset, model-pair release ID, task training-run ID, export 시각과
+도구 버전, git commit을 기록한다. ONNX 자체에도 task, activation, manifest version,
+opset, release/run ID custom metadata를 기록한다. runtime은 model/report hash,
+manifest, ONNX metadata와 실제 input/output metadata가 모두 일치하지 않으면 시작을
+거부하며, panel/dirt bundle의 dataset version/fingerprint 또는 release ID가 서로 달라도
+worker를 시작하지 않는다. output 범위를 보고 sigmoid 적용 여부를 추측하지 않는다.
+export 결과는 기본적으로 사람의 검토가 필요한 미승인 상태이며, production 실행에는
+두 bundle 모두 별도의 배포 승인이 필요하다.
 
 배포 전 두 bundle을 독립적으로 검사할 수 있다.
 
@@ -234,6 +240,10 @@ da-daka-verify-model --task panel_detection \
   --manifest <PANEL_BUNDLE/model.json>
 da-daka-verify-model --task dirt_segmentation \
   --manifest <DIRT_BUNDLE/model.json>
+da-daka-verify-pipeline \
+  --panel-manifest <PANEL_BUNDLE/model.json> \
+  --dirt-manifest <DIRT_BUNDLE/model.json> \
+  --require-deployment-approved
 ```
 
 ## runtime 후처리와 protocol-v3

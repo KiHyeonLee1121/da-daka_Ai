@@ -50,7 +50,9 @@ def test_render_overlay_draws_without_modifying_camera_frame():
     assert rendered.shape == frame.shape
     assert np.array_equal(frame, original)
     assert np.count_nonzero(rendered) > 0
-    assert rendered[120, 220].any()
+    assert tuple(rendered[120, 220]) == (255, 150, 45)
+    dirt_left = (int(round(0.45 * 639)), int(round(0.48 * 359)))
+    assert tuple(rendered[dirt_left[1], dirt_left[0]]) == (60, 245, 90)
 
 
 def test_render_overlay_handles_idle_preview_without_detections():

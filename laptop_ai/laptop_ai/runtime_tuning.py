@@ -60,6 +60,15 @@ def configure_cuda_environment(config: RuntimeTuning) -> None:
     """Set CUDA process knobs before ONNX Runtime creates its first context."""
     if config.cuda_module_loading_lazy:
         os.environ.setdefault('CUDA_MODULE_LOADING', 'LAZY')
+    # The cuda/cudnn pip extras keep their shared libraries inside the Python
+    # environment instead of a system CUDA directory. Load those libraries
+    # before creating a session so ONNX Runtime cannot silently lose the CUDA
+    # provider because libcublas/libcudnn are outside the linker search path.
+    import onnxruntime as ort
+
+    preload = getattr(ort, 'preload_dlls', None)
+    if preload is not None:
+        preload(directory='')
 
 
 def configure_opencv(config: RuntimeTuning) -> None:

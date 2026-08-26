@@ -115,7 +115,8 @@ flowchart TB
 | `docs/branch_consolidation.md` | 과거 브랜치 기능의 통합·대체 근거 |
 | `operator_app` | Pi 데스크톱/VNC용 PyQt5 운영 화면(직접 MAVROS 제어 없음) |
 | `docs/pi_operator_app.md` | 운영 앱, 계류 1 m 실기체 검증, 안전 잠금과 업데이트 원칙 |
-| `tools` | 비행 명령을 내리지 않는 카메라/투영 진단 도구 |
+| `desktop` | GPU 노트북용 실시간 AI 모니터와 Pi 탐색 바탕화면 앱 템플릿 |
+| `tools` | GPU 앱 실행·설치, Pi 카메라 시작과 비행 명령을 내리지 않는 진단 도구 |
 
 Pi의 ROS 2가 Docker 안에서 실행되고 카메라 도구가 호스트에만 있는 경우,
 `tools/edge_gpu_link.py`로 비행 노드 없이 카메라와 GPU 통신 경로만 실행할 수
@@ -269,6 +270,8 @@ da-daka-export-model \
   --checkpoint <TRAIN_RUN/checkpoint.pt> \
   --metrics <APPROVED_VALIDATION_REPORT.json> \
   --threshold <APPROVED_THRESHOLD> \
+  --release-id <MODEL_PAIR_RELEASE_ID> \
+  --training-run-id <TASK_TRAINING_RUN_ID> \
   --output-dir <NEW_MODEL_BUNDLE>
 ```
 
@@ -280,16 +283,24 @@ da-daka-export-model \
 └── hailo_deployment.json
 ```
 
-`model.json`에는 ONNX/checkpoint SHA-256, dataset version/fingerprint, input shape,
-letterbox/color/dtype/scale/mean/std, output name/shape/activation, threshold와 component
-policy가 들어간다. panel/dirt bundle의 dataset identity가 서로 다르거나 ONNX 실제
-metadata/shape/hash가 manifest와 다르면 worker는 시작하지 않는다.
+`model.json`에는 architecture family, ONNX input name/shape,
+ONNX/checkpoint/threshold report SHA-256, ONNX opset, model-pair
+release ID, task training-run ID, export 시각/도구 버전, dataset version/fingerprint,
+input shape, letterbox/color/dtype/scale/mean/std, output name/shape/activation,
+threshold와 component policy가 들어간다. panel/dirt bundle의 dataset 또는 release
+identity가 서로 다르거나 ONNX 실제 metadata/shape/hash, `metrics.json` hash가
+manifest와 다르면 worker는 시작하지 않는다. export 직후 상태는
+`REQUIRES_HUMAN_REVIEW`이며 안전 검토 없이 production 승인을 부여하지 않는다.
 
 ```bash
 da-daka-verify-model --task panel_detection \
   --manifest <PANEL_BUNDLE/model.json>
 da-daka-verify-model --task dirt_segmentation \
   --manifest <DIRT_BUNDLE/model.json>
+da-daka-verify-pipeline \
+  --panel-manifest <PANEL_BUNDLE/model.json> \
+  --dirt-manifest <DIRT_BUNDLE/model.json> \
+  --require-deployment-approved
 ```
 
 실제 dataset, backup, checkpoint, ONNX와 HEF weight는 `.gitignore` 대상이다. schema,
@@ -394,9 +405,12 @@ nvidia-smi
 da-daka-nvidia-check
 ```
 
-`da-daka-nvidia-check`에서 `CUDAExecutionProvider`를 사용할 수 있어야 한다.
+`laptop_ai` 설치는 ONNX Runtime GPU와 호환 CUDA/cuDNN Python runtime도 함께
+설치한다. 시작 시 해당 공유 라이브러리를 먼저 load하고
+`da-daka-nvidia-check`에서 CUDA provider library까지 실제로 열 수 있어야 한다.
 노트북 worker는 CPU-only ONNX Runtime으로 실제 판단을 대신하지 않고 시작을
-거부한다.
+거부한다. system CUDA Toolkit이나 `nvcc`는 이미 export된 ONNX를 실행하는 데
+필수는 아니지만, NVIDIA driver와 Python CUDA runtime의 호환성은 확인해야 한다.
 
 #### Pi 카메라·AI 인식 결과 모니터
 
@@ -406,7 +420,8 @@ da-daka-nvidia-check
 결과 전송과 시각화를 모두 담당한다.
 
 검증된 panel detector와 dirt segmenter의 `model.json` bundle manifest를 준비한
-뒤 다음 실행기로 가상환경 생성, NVIDIA/CUDA 점검과 모니터 실행을 진행한다.
+뒤 다음 실행기로 기존 가상환경, NVIDIA/CUDA, 모델 pair를 점검하고 모니터를
+실행한다.
 
 ```bash
 chmod +x tools/start_laptop_ai_viewer.sh
@@ -415,9 +430,10 @@ chmod +x tools/start_laptop_ai_viewer.sh
   --dirt-manifest <DIRT_BUNDLE/model.json>
 ```
 
-다른 모델 위치를 사용할 때는 `--panel-manifest`와 `--dirt-manifest`, 전체 화면은
-`--fullscreen`, 이미 설치가 끝난 뒤 빠르게 다시 실행할 때는 `--skip-install`을
-추가한다. 창에는 다음 정보가 같은 카메라 프레임 위에 표시된다.
+기본 실행은 package를 설치하거나 업그레이드하지 않는다. 새 환경을 처음 만들
+때만 `--install`을 명시하고, 별도 검증 환경은 `DA_DAKA_VENV=<PATH>`로 지정한다.
+다른 모델 위치에는 `--panel-manifest`와 `--dirt-manifest`, 전체 화면에는
+`--fullscreen`을 사용한다. 창에는 다음 정보가 같은 카메라 프레임 위에 표시된다.
 
 - 파란색: 검출한 모든 패널 후보
 - 초록색: 현재 청소 대상으로 선택한 패널
@@ -430,6 +446,40 @@ chmod +x tools/start_laptop_ai_viewer.sh
 터미널에서 기존 `tools/gpu_laptop_start_pi_camera.sh`로 Pi 카메라 송출을
 시작한다. SSH 원격 시작을 사용하지 않을 때는 Pi에서 `edge_gpu_link.py` 또는
 ROS `video_streamer`를 단 하나만 실행한다.
+
+#### 프레임별 관찰 전용 GPU 응용프로그램
+
+미션 worker와 분리해 매 카메라 frame에서 Panel 모델을 한 번 실행하고, 검출된
+모든 panel ROI에 Dirt 모델을 실행하는 관찰 전용 앱도 제공한다. 이 앱은 UDP
+5600 영상만 수신하며 UDP 5005/5006, MAVROS, 비행, GPIO 또는 분사 명령을 사용하지
+않는다.
+
+```bash
+DA_DAKA_VENV=<KNOWN_GOOD_VENV> \
+  ./tools/start_live_ai_monitor.sh \
+  --pi-ip <PI_IP> \
+  --panel-manifest <PANEL_BUNDLE/model.json> \
+  --dirt-manifest <DIRT_BUNDLE/model.json>
+```
+
+실행기는 GPU와 승인된 model pair를 먼저 검증한 다음 SSH로 Pi의 `rpicam-vid`만
+camera-only 모드로 시작한다. 창을 닫으면 앱이 시작한 SSH 카메라 process도
+정리한다. `--no-start-camera`는 이미 실행 중인 UDP 5600 stream을 받을 때만 쓴다.
+
+Ubuntu 바탕화면에 실시간 모니터와 같은 네트워크의 Pi IP 탐색 앱을 설치하려면
+저장소에서 다음을 한 번 실행한다. 설치기는 현재 저장소와 검증된 `.venv`의 절대
+경로를 바탕화면 항목에 기록하므로 저장소를 이동한 뒤에는 다시 실행한다.
+
+```bash
+DA_DAKA_VENV=<KNOWN_GOOD_VENV> \
+  ./tools/install_gpu_laptop_desktop_apps.sh
+```
+
+- `DA-DAKA GPU 실시간 AI 모니터`: Pi IP 입력, 모델/GPU 검증, camera-only 송출과
+  프레임별 overlay를 한 번에 시작한다.
+- `DA-DAKA 같은 네트워크 Pi IP 찾기`: 직접 연결된 최대 `/24` 규모 LAN에서
+  MAC/hostname/SSH 단서로 Raspberry Pi 후보를 찾는다. 판정은 IP 소유를 보증하지
+  않는다.
 
 ## 네트워크 데이터 흐름
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
+import platform
 from pathlib import Path
 
 from da_daka_training.models import (
@@ -21,11 +23,14 @@ def main() -> None:
     parser.add_argument('--checkpoint', required=True)
     parser.add_argument('--metrics', required=True)
     parser.add_argument('--threshold', required=True, type=float)
+    parser.add_argument('--release-id', required=True)
+    parser.add_argument('--training-run-id', required=True)
     parser.add_argument('--output-dir', required=True)
     args = parser.parse_args()
 
     import onnx
     import torch
+    import torchvision
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=False)
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
@@ -43,11 +48,15 @@ def main() -> None:
         wrapper = dirt_binary_logit_wrapper(model.eval(), input_height, input_width)
         output_names = ['mask_logits']
         dynamic_axes = None
+        architecture_family = 'torchvision.lraspp_mobilenet_v3_large'
     elif task == 'panel_detection':
         model = create_panel_model(config)
         model.load_state_dict(checkpoint['model_state'])
         wrapper = panel_three_output_wrapper(model.eval())
         output_names = ['boxes', 'scores', 'labels']
+        architecture_family = (
+            'torchvision.fasterrcnn_mobilenet_v3_large_fpn'
+        )
         dynamic_axes = {
             'boxes': {0: 'detections'},
             'scores': {0: 'detections'},
@@ -55,25 +64,41 @@ def main() -> None:
         }
     else:
         raise ValueError(f'unsupported checkpoint task: {task!r}')
+    onnx_opset = 17
     torch.onnx.export(
-        wrapper,
+        wrapper.eval(),
         dummy,
         model_path,
         input_names=['images'],
         output_names=output_names,
-        opset_version=17,
+        opset_version=onnx_opset,
         do_constant_folding=True,
         dynamic_axes=dynamic_axes,
+        dynamo=False,
     )
     exported = onnx.load(str(model_path))
+    default_domain_opsets = [
+        int(item.version)
+        for item in exported.opset_import
+        if item.domain in {'', 'ai.onnx'}
+    ]
+    if default_domain_opsets != [onnx_opset]:
+        raise RuntimeError(
+            f'exported ONNX opset mismatch: expected {onnx_opset}, '
+            f'found {default_domain_opsets}'
+        )
     onnx.helper.set_model_props(
         exported,
         {
             'da_daka.task': task,
+            'da_daka.architecture_family': architecture_family,
             'da_daka.output_activation': (
                 'logits' if task == 'dirt_segmentation' else 'none'
             ),
             'da_daka.manifest_version': '1',
+            'da_daka.onnx_opset': str(onnx_opset),
+            'da_daka.release_id': args.release_id,
+            'da_daka.training_run_id': args.training_run_id,
         },
     )
     onnx.checker.check_model(exported)
@@ -81,12 +106,14 @@ def main() -> None:
     model_sha = _sha256(model_path)
     metrics_source = Path(args.metrics).resolve()
     metrics = json.loads(metrics_source.read_text(encoding='utf-8'))
+    _verify_threshold_provenance(task, metrics, args.threshold)
     metrics_bundle = {
         'task': task,
         'selected_threshold': args.threshold,
         'selection_requires_human_safety_review': True,
         'source_report_sha256': _sha256(metrics_source),
         'source_report': metrics,
+        'selection_split': 'validation',
     }
     (output / 'metrics.json').write_text(
         json.dumps(metrics_bundle, indent=2, sort_keys=True) + '\n',
@@ -95,9 +122,30 @@ def main() -> None:
     manifest = {
         'manifest_version': 1,
         'task': task,
+        'architecture_family': architecture_family,
         'model_file': 'model.onnx',
         'model_sha256': model_sha,
+        'onnx_opset': onnx_opset,
         'checkpoint_sha256': _sha256(Path(args.checkpoint).resolve()),
+        'release_id': args.release_id,
+        'training_run_id': args.training_run_id,
+        'export_timestamp': datetime.now(timezone.utc).isoformat(),
+        'export_tool_versions': {
+            'python': platform.python_version(),
+            'torch': str(torch.__version__),
+            'torchvision': str(torchvision.__version__),
+            'onnx': str(onnx.__version__),
+        },
+        'class_mapping': (
+            {'clean': 0, 'dirt': 1}
+            if task == 'dirt_segmentation'
+            else {'background': 0, 'solar_panel': 1}
+        ),
+        'test_only': False,
+        'deployment_approved': False,
+        'safety': 'REQUIRES_HUMAN_REVIEW',
+        'input_name': 'images',
+        'input_shape': [1, 3, input_height, input_width],
         'input_width': input_width,
         'input_height': input_height,
         'resize': 'letterbox',
@@ -186,6 +234,31 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _verify_threshold_provenance(
+    task: str,
+    metrics: dict,
+    threshold: float,
+) -> None:
+    """Reject CLI thresholds not explicitly selected on validation data."""
+    if metrics.get('selection_split') != 'validation':
+        raise ValueError('threshold report must declare selection_split=validation')
+    key = 'selected_threshold' if task == 'dirt_segmentation' else 'score_threshold'
+    selected = metrics.get(key)
+    if isinstance(selected, bool) or not isinstance(selected, (int, float)):
+        raise ValueError(f'threshold report is missing numeric {key}')
+    if abs(float(selected) - float(threshold)) > 1e-9:
+        raise ValueError(
+            f'--threshold {threshold} does not match validation report {key}={selected}'
+        )
+    if (
+        task == 'dirt_segmentation'
+        and metrics.get('selection_status') != 'SELECTED_FROM_VALIDATION'
+    ):
+        raise ValueError(
+            'dirt threshold requires selection_status=SELECTED_FROM_VALIDATION'
+        )
 
 
 if __name__ == '__main__':
