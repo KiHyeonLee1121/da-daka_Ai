@@ -35,9 +35,16 @@
   },
   "legacy_delivery_paths": [
     "models/dirt_v2/model.onnx",
-    "models/dirt_v2/model.json"
+    "models/dirt_v2.onnx"
   ],
+  "legacy_sidecar_path": "models/dirt_v2/model.json",
+  "legacy_metadata": {
+    "handoff_checksum": "STALE_PACKAGING_METADATA",
+    "dirt_sidecar": "STALE_PACKAGING_METADATA"
+  },
   "integration": {
-    "state": "MODEL_SIDECAR_REGENERATION_REQUIRED"
+    "state": "MODEL_SIDECAR_REGENERATION_REQUIRED",
+    "runtime_activation": "PENDING_MATCHING_SCHEMA_V1_SIDECAR",
+    "metadata_authority": "V3_EVIDENCE_ONLY"
   }
 }
