@@ -9,13 +9,21 @@ LAPTOP_IP="${LAPTOP_IP:-10.205.180.126}"
 PI_PROJECT="${PI_PROJECT:-/home/kihyeon/da-daka_Ai}"
 PI_WORKSPACE="${PI_WORKSPACE:-${PI_PROJECT}/ros2_ws}"
 PI_LAUNCHER="${PI_LAUNCHER:-${PI_PROJECT}/tools/edge_gpu_link.py}"
+DA_DAKA_NONINTERACTIVE="${DA_DAKA_NONINTERACTIVE:-0}"
+DA_DAKA_CAMERA_ONLY="${DA_DAKA_CAMERA_ONLY:-0}"
+VIDEO_WIDTH="${VIDEO_WIDTH:-1280}"
+VIDEO_HEIGHT="${VIDEO_HEIGHT:-720}"
+VIDEO_FRAMERATE="${VIDEO_FRAMERATE:-20}"
+VIDEO_BITRATE="${VIDEO_BITRATE:-4000000}"
 
 finish() {
     local exit_code=$?
     if [[ ${exit_code} -ne 0 && ${exit_code} -ne 130 ]]; then
         echo
         echo "Pi 카메라 전송을 시작하지 못했습니다." >&2
-        read -r -p "Enter를 누르면 종료합니다." || true
+        if [[ "${DA_DAKA_NONINTERACTIVE}" != "1" ]]; then
+            read -r -p "Enter를 누르면 종료합니다." || true
+        fi
     fi
     exit "${exit_code}"
 }
@@ -50,12 +58,23 @@ fi
 
 echo "Pi 연결 확인 완료"
 echo "SSH로 Pi 카메라 송출을 시작합니다."
+if [[ "${DA_DAKA_CAMERA_ONLY}" == "1" ]]; then
+    echo "관찰 전용 camera-only 모드: ROS control/result process를 시작하지 않습니다."
+fi
 echo "이 터미널을 유지하고, 전송을 끝낼 때 Ctrl+C를 누르세요."
 echo
 
-printf -v remote_command \
-    "cd %q && exec python3 %q --laptop-ip %q --workspace %q" \
-    "${PI_PROJECT}" "${PI_LAUNCHER}" "${LAPTOP_IP}" "${PI_WORKSPACE}"
+if [[ "${DA_DAKA_CAMERA_ONLY}" == "1" ]]; then
+    video_output="udp://${LAPTOP_IP}:5600?pkt_size=1316"
+    printf -v remote_command \
+        "exec rpicam-vid -t 0 -n --codec libav --libav-format mpegts --low-latency --width %q --height %q --framerate %q --bitrate %q -o %q" \
+        "${VIDEO_WIDTH}" "${VIDEO_HEIGHT}" "${VIDEO_FRAMERATE}" \
+        "${VIDEO_BITRATE}" "${video_output}"
+else
+    printf -v remote_command \
+        "cd %q && exec python3 %q --laptop-ip %q --workspace %q" \
+        "${PI_PROJECT}" "${PI_LAUNCHER}" "${LAPTOP_IP}" "${PI_WORKSPACE}"
+fi
 
 ssh -tt \
     -o BatchMode=yes \

@@ -22,6 +22,7 @@ def load_config(
     pi_ip: str | None = None,
     dirt_manifest_path: str | None = None,
     panel_manifest_path: str | None = None,
+    runtime_mode: str | None = None,
 ) -> dict:
     """Load the worker configuration with optional safe CLI overrides."""
     config_path = Path(path).expanduser().resolve()
@@ -39,6 +40,8 @@ def load_config(
         config['panel_model']['manifest'] = str(
             Path(panel_manifest_path).expanduser()
         )
+    if runtime_mode:
+        config.setdefault('runtime', {})['mode'] = runtime_mode
     return config
 
 
@@ -67,6 +70,14 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument('--window-title')
     result.add_argument('--screenshot-directory')
+    result.add_argument(
+        '--artifact-test',
+        action='store_true',
+        help=(
+            'explicitly allow test-only/unapproved model bundles; never use '
+            'for production, flight, or spray decisions'
+        ),
+    )
     return result
 
 
@@ -83,6 +94,9 @@ def main() -> int:
             pi_ip=arguments.pi_ip,
             dirt_manifest_path=arguments.dirt_manifest,
             panel_manifest_path=arguments.panel_manifest,
+            runtime_mode=(
+                'artifact_test' if arguments.artifact_test else None
+            ),
         )
         viewer_config = config.get('viewer', {})
         fullscreen = (

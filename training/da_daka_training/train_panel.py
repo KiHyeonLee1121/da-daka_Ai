@@ -126,6 +126,7 @@ def _evaluate(model, dataset, device, config):
                 }
             )
     return {
+        'selection_split': 'validation',
         'score_threshold': score_threshold,
         **evaluate_panel_detection(samples),
     }

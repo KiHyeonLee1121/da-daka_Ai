@@ -23,6 +23,11 @@ def main() -> None:
     parser.add_argument('--config', required=True)
     parser.add_argument('--runs', type=int, default=100)
     parser.add_argument('--output')
+    parser.add_argument(
+        '--allow-unapproved',
+        action='store_true',
+        help='benchmark a trained review-pending bundle without approving it',
+    )
     args = parser.parse_args()
     from laptop_ai.onnx_dirt_detector import OnnxDirtSegmenter
 
@@ -35,6 +40,7 @@ def main() -> None:
         str(model['manifest']),
         backend=str(model.get('backend', 'cuda')),
         performance=config.get('performance'),
+        require_deployment_approved=not args.allow_unapproved,
     )
     frame = np.zeros(
         (

@@ -11,7 +11,7 @@ dependencies = [
   "numpy>=1.26,<3",
   "opencv-python>=4.8,<5",
   "av>=12,<17",
-  "onnxruntime-gpu>=1.18,<2",
+  "onnxruntime-gpu[cuda,cudnn]>=1.18,<2",
   "PyYAML>=6,<7",
 ]
 
@@ -24,10 +24,12 @@ tools = [
 
 [project.scripts]
 da-daka-laptop-ai-viewer = "laptop_ai.viewer_app:main"
+da-daka-live-monitor = "laptop_ai.live_monitor_app:main"
 da-daka-nvidia-check = "laptop_ai.nvidia_check:main"
 da-daka-segmentation-benchmark = "laptop_ai.segmentation_benchmark:main"
 da-daka-production-benchmark = "laptop_ai.production_benchmark:main"
 da-daka-verify-model = "laptop_ai.verify_model:main"
+da-daka-verify-pipeline = "laptop_ai.verify_pipeline:main"
 da-daka-joint-optimizer = "laptop_ai.optimizer_cli:main"
 da-daka-convert-onnx-fp16 = "laptop_ai.convert_onnx_fp16:main"
 

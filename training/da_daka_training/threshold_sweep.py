@@ -79,6 +79,7 @@ def main() -> None:
     )
     report = {
         'selection_status': 'UNSELECTED_REQUIRES_PROJECT_RISK_REVIEW',
+        'selection_split': 'validation',
         'primary_risk': 'false_clean_rate',
         'validation_sample_count': len(samples),
         'minimum_component_area': args.minimum_component_area,

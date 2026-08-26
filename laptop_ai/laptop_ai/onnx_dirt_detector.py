@@ -48,10 +48,14 @@ class OnnxDirtSegmenter:
         *,
         backend: str = 'cuda',
         performance: dict | None = None,
+        require_deployment_approved: bool = True,
+        allow_test_only: bool = False,
     ) -> None:
         self.manifest = ModelManifest.load(
             manifest_path,
             expected_task='dirt_segmentation',
+            require_deployment_approved=require_deployment_approved,
+            allow_test_only=allow_test_only,
         )
         backend = backend.lower()
         if backend not in {'cuda', 'cpu'}:

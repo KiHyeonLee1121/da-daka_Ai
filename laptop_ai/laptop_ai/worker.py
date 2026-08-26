@@ -85,6 +85,16 @@ class LaptopAiWorker:
         video = config['video']
         panel = config['panel_model']
         model = config['dirt_model']
+        runtime_mode = str(
+            config.get('runtime', {}).get('mode', 'production_onnx')
+        ).lower()
+        if runtime_mode not in {'production_onnx', 'artifact_test'}:
+            raise ValueError(
+                'runtime.mode must be production_onnx or artifact_test'
+            )
+        self.runtime_mode = runtime_mode
+        require_deployment_approved = runtime_mode == 'production_onnx'
+        allow_test_only = runtime_mode == 'artifact_test'
         self.source_id = str(network['source_id'])
         self.pi_ip = str(network['pi_ip'])
         self.pi_address = (self.pi_ip, int(network['result_port']))
@@ -105,6 +115,8 @@ class LaptopAiWorker:
             str(panel['manifest']),
             backend=str(panel.get('backend', 'cuda')),
             performance=config.get('performance'),
+            require_deployment_approved=require_deployment_approved,
+            allow_test_only=allow_test_only,
         )
         selection = config.get('target_selection', {})
         self.target_x_norm = float(selection.get('target_x_norm', 0.5))
@@ -116,6 +128,8 @@ class LaptopAiWorker:
             str(model['manifest']),
             backend=str(model.get('backend', 'cuda')),
             performance=config.get('performance'),
+            require_deployment_approved=require_deployment_approved,
+            allow_test_only=allow_test_only,
         )
         verify_pipeline_dataset_identity(
             self.panel_detector.manifest,

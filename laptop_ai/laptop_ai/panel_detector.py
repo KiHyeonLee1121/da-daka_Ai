@@ -140,6 +140,8 @@ class OnnxPanelDetector:
         *,
         backend: str = 'cuda',
         performance: dict | None = None,
+        require_deployment_approved: bool = True,
+        allow_test_only: bool = False,
     ) -> None:
         import onnxruntime as ort
 
@@ -154,6 +156,8 @@ class OnnxPanelDetector:
         self.manifest = ModelManifest.load(
             manifest_path,
             expected_task='panel_detection',
+            require_deployment_approved=require_deployment_approved,
+            allow_test_only=allow_test_only,
         )
         output_names = self.manifest.raw.get('output_names')
         if output_names != ['boxes', 'scores', 'labels']:

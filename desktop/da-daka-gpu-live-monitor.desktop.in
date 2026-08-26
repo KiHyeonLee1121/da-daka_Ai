@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DA-DAKA GPU 실시간 AI 모니터
+Comment=Pi 카메라의 패널·오염 GPU 추론 결과를 프레임별로 표시합니다
+Exec=/usr/bin/env DA_DAKA_VENV="@VENV@" /usr/bin/bash "@LIVE_LAUNCHER@"
+TryExec=/usr/bin/bash
+Icon=camera-video
+Terminal=true
+Categories=Utility;
+StartupNotify=true

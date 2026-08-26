@@ -22,6 +22,11 @@ def main() -> None:
     parser.add_argument('--dataset-root', required=True)
     parser.add_argument('--output', required=True)
     parser.add_argument('--maximum-samples', type=int, default=0)
+    parser.add_argument(
+        '--allow-unapproved',
+        action='store_true',
+        help='measure a trained review-pending bundle without approving it',
+    )
     args = parser.parse_args()
     from laptop_ai.onnx_dirt_detector import OnnxDirtSegmenter
 
@@ -32,6 +37,7 @@ def main() -> None:
         str(model['manifest']),
         backend=backend,
         performance=config.get('performance'),
+        require_deployment_approved=not args.allow_unapproved,
     )
     root = Path(args.dataset_root)
     dataset_manifest = json.loads(
