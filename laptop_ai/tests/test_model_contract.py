@@ -24,6 +24,7 @@ class Session:
             'da_daka.task': 'dirt_segmentation',
             'da_daka.output_activation': activation,
             'da_daka.manifest_version': '1',
+            'da_daka.onnx_opset': '17',
         }})()
 
     def get_inputs(self):
@@ -48,6 +49,7 @@ class PanelSession:
             'da_daka.task': 'panel_detection',
             'da_daka.output_activation': 'none',
             'da_daka.manifest_version': '1',
+            'da_daka.onnx_opset': '17',
         }})()
 
     def get_inputs(self):
@@ -68,6 +70,7 @@ def manifest(tmp_path, **updates):
         'task': 'dirt_segmentation',
         'model_file': 'model.onnx',
         'model_sha256': hashlib.sha256(model.read_bytes()).hexdigest(),
+        'onnx_opset': 17,
         'checkpoint_sha256': 'e' * 64,
         'input_width': 640,
         'input_height': 384,
@@ -125,6 +128,12 @@ def test_activation_metadata_mismatch_fails_closed(tmp_path):
         loaded.verify_onnx_session(
             Session([1, 3, 384, 640], [1, 1, 384, 640], 'probability')
         )
+
+
+def test_onnx_opset_metadata_mismatch_fails_closed(tmp_path):
+    loaded = ModelManifest.load(manifest(tmp_path, onnx_opset=18))
+    with pytest.raises(ModelContractError, match='onnx_opset'):
+        loaded.verify_onnx_session(Session([1, 3, 384, 640], [1, 1, 384, 640]))
 
 
 def test_model_sha_mismatch_fails_closed(tmp_path):

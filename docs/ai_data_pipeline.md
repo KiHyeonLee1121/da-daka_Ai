@@ -142,9 +142,24 @@ target 장치 memory를 함께 비교한다.
 ## 학습과 augmentation
 
 ```bash
-da-daka-train-panel --config training/configs/panel_detector.yaml
-da-daka-train-dirt --config training/configs/dirt_segmenter.yaml
+da-daka-train-panel --config training/configs/panel_detector.yaml \
+  --dataset-root <DATASET_ROOT> --output-dir <LOCAL_RUN> \
+  --artifact-dir <PERSISTENT_DRIVE_RUN>
+da-daka-train-dirt --config training/configs/dirt_segmenter.yaml \
+  --dataset-root <DATASET_ROOT> --output-dir <LOCAL_RUN> \
+  --artifact-dir <PERSISTENT_DRIVE_RUN>
 ```
+
+학습 전에 `da-daka-verify-dataset`이 release identity, canonical fingerprint,
+manifest/COCO/filesystem count, master/panel image SHA-256와 Dirt ROI/mask를
+fail-closed로 검증한다. Colab은 Drive metadata preflight 후 `/content`에 atomic
+staging하고 full verification과 실제 loader smoke test를 통과해야 trainer를
+호출한다. 상세 launcher는 `training/colab/da_daka_training.ipynb`다.
+
+각 epoch 뒤 `checkpoints/last.pt`와 metric-best `checkpoints/best.pt`, history와 run
+metadata를 저장한다. `--artifact-dir`을 지정하면 이 작은 artifact들을 Drive에
+원자적으로 mirror하고, `--resume`은 task/dataset identity/resume-sensitive config를
+확인한 뒤 optimizer/RNG 상태까지 복원한다.
 
 panel 경로는 torchvision Faster R-CNN MobileNetV3 FPN을, dirt 경로는 LRASPP
 binary segmenter를 제공한다. architecture는 Hailo operator 지원과 실측 정확도를
@@ -196,11 +211,13 @@ threshold와 component filter 후보는 runtime과 같은 connected-component �
 
 ```bash
 da-daka-evaluate-model \
-  --checkpoint <DIRT_RUN/checkpoint.pt> --split test \
+  --checkpoint <DIRT_RUN/checkpoints/best.pt> --split test \
+  --dataset-root <DATASET_ROOT> \
   --threshold <APPROVED_THRESHOLD> --output-dir <NEW_TEST_REPORT_DIR>
 
 da-daka-evaluate-model \
-  --checkpoint <PANEL_RUN/checkpoint.pt> --split test \
+  --checkpoint <PANEL_RUN/checkpoints/best.pt> --split test \
+  --dataset-root <DATASET_ROOT> \
   --score-threshold <APPROVED_SCORE_THRESHOLD> \
   --output-dir <NEW_TEST_REPORT_DIR>
 ```

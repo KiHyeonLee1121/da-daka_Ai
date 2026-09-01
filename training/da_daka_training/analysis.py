@@ -11,6 +11,12 @@ import cv2
 import numpy as np
 import yaml
 
+from da_daka_training.release import (
+    DEFAULT_DATASET_FINGERPRINT,
+    DEFAULT_DATASET_VERSION,
+    verify_dataset_release,
+)
+
 
 def analyze_dataset(
     dataset_root: str | Path,
@@ -88,7 +94,15 @@ def main() -> None:
     parser.add_argument('--dataset-root', required=True)
     parser.add_argument('--candidates', required=True)
     parser.add_argument('--output', required=True)
+    parser.add_argument('--expected-version', default=DEFAULT_DATASET_VERSION)
+    parser.add_argument('--expected-fingerprint', default=DEFAULT_DATASET_FINGERPRINT)
     args = parser.parse_args()
+    verify_dataset_release(
+        args.dataset_root,
+        expected_version=args.expected_version,
+        expected_fingerprint=args.expected_fingerprint,
+        mode='full',
+    )
     raw = yaml.safe_load(Path(args.candidates).read_text(encoding='utf-8'))
     candidates = [
         (int(item['width']), int(item['height']))

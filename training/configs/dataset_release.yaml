@@ -1,0 +1,6 @@
+dataset_version: "da-daka-0fe4fc5f136e2a79"
+dataset_fingerprint: "0fe4fc5f136e2a79240c3ddf7ba731d45a187b044c9a7a9fdf5bff956145a9fe"
+
+# Paths are intentionally absent. Supply them through CLI arguments or the
+# DA_DAKA_DATASET_ROOT environment variable on each machine.
+verification_mode: "full"

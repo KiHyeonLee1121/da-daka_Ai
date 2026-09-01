@@ -7,10 +7,14 @@ from zipfile import ZipFile
 import cv2
 import numpy as np
 import pytest
-
 from da_daka_training.dataset_builder import (
-    build_master_dataset,
     DatasetValidationError,
+    build_master_dataset,
+)
+from da_daka_training.release import (
+    DatasetReleaseError,
+    stage_dataset_release,
+    verify_dataset_release,
 )
 from da_daka_training.sources import DatasetSourceError, load_source
 
@@ -230,3 +234,70 @@ def test_dataset_fingerprint_is_stable_after_source_relocation(tmp_path):
         first_manifest['dataset_fingerprint']
         == second_manifest['dataset_fingerprint']
     )
+
+
+def test_built_release_passes_full_identity_and_inventory_verification(tmp_path):
+    sources = [_coco_source(tmp_path / f'source-{i}', i * 40) for i in range(1, 4)]
+    output = build_master_dataset(_config(tmp_path, sources))
+    manifest = json.loads((output / 'dataset_manifest.json').read_text())
+    report = verify_dataset_release(
+        output,
+        expected_version=manifest['dataset_version'],
+        expected_fingerprint=manifest['dataset_fingerprint'],
+        mode='full',
+    )
+    assert report['status'] == 'VERIFIED'
+    assert report['counts']['master_images'] == 3
+
+
+def test_release_verifier_fails_closed_for_missing_uploaded_mask(tmp_path):
+    sources = [_coco_source(tmp_path / f'source-{i}', i * 40) for i in range(1, 4)]
+    output = build_master_dataset(_config(tmp_path, sources))
+    manifest = json.loads((output / 'dataset_manifest.json').read_text())
+    sample = json.loads(
+        (output / 'dirt_segmentation/samples.jsonl').read_text().splitlines()[0]
+    )
+    (output / 'dirt_segmentation' / sample['mask']).unlink()
+    with pytest.raises(DatasetReleaseError, match='DATASET INCOMPLETE OR WRONG RELEASE'):
+        verify_dataset_release(
+            output,
+            expected_version=manifest['dataset_version'],
+            expected_fingerprint=manifest['dataset_fingerprint'],
+            mode='metadata',
+        )
+
+
+def test_full_release_verifier_rejects_corrupted_derived_roi_content(tmp_path):
+    sources = [_coco_source(tmp_path / f"source-{i}", i * 40) for i in range(1, 4)]
+    output = build_master_dataset(_config(tmp_path, sources))
+    manifest = json.loads((output / "dataset_manifest.json").read_text())
+    sample = json.loads(
+        (output / "dirt_segmentation/samples.jsonl").read_text().splitlines()[0]
+    )
+    roi_path = output / "dirt_segmentation" / sample["image"]
+    roi = cv2.imread(str(roi_path), cv2.IMREAD_COLOR)
+    roi[0, 0] = (roi[0, 0].astype(np.uint16) + 1).clip(0, 255).astype(np.uint8)
+    assert cv2.imwrite(str(roi_path), roi)
+    with pytest.raises(DatasetReleaseError, match="ROI image content mismatch"):
+        verify_dataset_release(
+            output,
+            expected_version=manifest["dataset_version"],
+            expected_fingerprint=manifest["dataset_fingerprint"],
+            mode="full",
+        )
+
+
+def test_release_staging_preflights_then_verifies_local_copy(tmp_path):
+    sources = [_coco_source(tmp_path / f'source-{i}', i * 40) for i in range(1, 4)]
+    output = build_master_dataset(_config(tmp_path, sources))
+    manifest = json.loads((output / 'dataset_manifest.json').read_text())
+    destination = tmp_path / 'local-ssd-dataset'
+    report = stage_dataset_release(
+        output,
+        destination,
+        expected_version=manifest['dataset_version'],
+        expected_fingerprint=manifest['dataset_fingerprint'],
+    )
+    assert report['status'] == 'STAGED_AND_VERIFIED'
+    assert destination.is_dir()
+    assert report['destination_verification']['verification_mode'] == 'full'

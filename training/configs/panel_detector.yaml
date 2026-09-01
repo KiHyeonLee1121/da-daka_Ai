@@ -1,6 +1,13 @@
-dataset_root: "/path/to/generated/da-daka-master"
-output_dir: "/path/to/runs/panel_detector_v1"
+# Supply paths with --dataset-root/--output-dir (or DA_DAKA_* environment
+# variables).  They are intentionally not tied to Windows, Drive, or Colab.
+dataset_root: null
+output_dir: null
+artifact_dir: null
 device: "cuda"
+dataset_release:
+  dataset_version: "da-daka-0fe4fc5f136e2a79"
+  dataset_fingerprint: "0fe4fc5f136e2a79240c3ddf7ba731d45a187b044c9a7a9fdf5bff956145a9fe"
+  verification_mode: "full"
 seed: 20260825
 deterministic: true
 pretrained: true
@@ -10,6 +17,7 @@ workers: 2
 learning_rate: 0.005
 weight_decay: 0.0005
 evaluation_score_threshold: 0.05
+checkpoint_selection_metric: "map_50_95"
 
 preprocess:
   input_width: 640   # candidate only; select from validation benchmark

@@ -73,6 +73,7 @@ class ModelManifest:
     task: str
     model_file: str
     model_sha256: str
+    onnx_opset: int
     checkpoint_sha256: str
     input_width: int
     input_height: int
@@ -250,6 +251,7 @@ class ModelManifest:
             task=task,
             model_file=model_file,
             model_sha256=model_sha256.lower(),
+            onnx_opset=_integer(raw, 'onnx_opset', minimum=11),
             checkpoint_sha256=checkpoint_sha256.lower(),
             input_width=width,
             input_height=height,
@@ -295,6 +297,7 @@ class ModelManifest:
             'da_daka.task': self.task,
             'da_daka.output_activation': self.output_activation,
             'da_daka.manifest_version': str(self.manifest_version),
+            'da_daka.onnx_opset': str(self.onnx_opset),
         }
         for key, expected_value in expected_metadata.items():
             if metadata.get(key) != expected_value:
